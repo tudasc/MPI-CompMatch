@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
 
 		// prepare buffer for RDMA access:
 		ucp_mem_map_params_t mem_params;
-		ucp_mem_attr_t mem_attrs;
+		//ucp_mem_attr_t mem_attrs;
 		ucs_status_t status;
 		// init mem params
 		memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
@@ -353,7 +353,7 @@ void begin_send(struct global_information *global_info, struct send_info *info) 
 void end_send(struct global_information *global_info, struct send_info *info) {
 	//nothing to do
 
-	spin_wait(&info->flag, DATA_RECEIVED);
+	spin_wait_for(&info->flag, DATA_RECEIVED);
 
 }
 
@@ -377,7 +377,7 @@ struct recv_info* match_Receive(struct global_information *global_info,
 void start_Receive(struct global_information *global_info,
 		struct recv_info *info) {
 
-	spin_wait(&info->matching_entry->flag, DATA_READY_TO_SEND);
+	spin_wait_for(&info->matching_entry->flag, DATA_READY_TO_SEND);
 
 	RDMA_Get(info->data_buf, info->matching_entry->size, info->dest,
 			info->matching_entry->data_addr, global_info->win);

@@ -25,29 +25,33 @@ void RDMA_Put(void*buffer,size_t size,int target,MPI_Aint target_displacement,MP
 // RDMA_Get
 void RDMA_Get(void*buffer,size_t size,int target,MPI_Aint target_displacement,MPI_Win win);
 
+#define RKEY_SPACE 50
+
 #define DEFAULT_STATUS 0
 #define DATA_READY_TO_SEND 1
-#define DATA_RECEIVED 1
+#define PREVIOUS_RKEY_IS_VALID 1 << 1
+#define DATA_RECEIVED 1<< 2
 
 struct matching_queue_entry{
 	int flag;
 	int tag;
-	MPI_Aint data_addr;
-	MPI_Aint flag_addr;
 	size_t size;
+	MPI_Aint data_addr;// where to pull data from
+	MPI_Aint flag_addr;// where to signal that data was received
+	char rkey[RKEY_SPACE];// space for rkey to access remote data
 };
 
 struct send_info{
 	int flag;// set by remote
 	int dest;
-	MPI_Aint flag_addr;
-	struct matching_queue_entry remote_entry;
+	MPI_Aint flag_addr;// where the remote matching_queue_entry starts
+	struct matching_queue_entry remote_entry;// copy of remote's matching_queue_entry (used as buffer to push it to remote)
 };
 
 struct recv_info{
-	int dest;
-	struct matching_queue_entry* matching_entry;
-	void* data_buf;
+	int dest;// source rank == dest of RDMA fetch
+	struct matching_queue_entry* matching_entry;// ptr to the matching entry
+	void* data_buf;// ptr to data buf
 };
 
 
@@ -64,8 +68,15 @@ MPI_Aint* remote_matching_queue_addresses;
 MPI_Win win;
 };
 
-void spin_wait(int* flag, int condition){
+void spin_wait_for(int* flag, int condition){
 	while(*flag!=condition){
+		//TODO sleep
+	}
+	return;
+}
+
+void spin_wait_until_not(int* flag, int condition){
+	while(*flag==condition){
 		//TODO sleep
 	}
 	return;
