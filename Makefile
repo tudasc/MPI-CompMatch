@@ -10,7 +10,7 @@
 # Include npath showing to openmpoi internals
 INCLUDE=-I/home/tj75qeje/openmpi-4.1.1/ -I/home/tj75qeje/openmpi-4.1.1/opal/include -I/home/tj75qeje/openmpi-4.1.1/ompi/include/ -I/home/tj75qeje/openmpi-4.1.1/orte/include
 
-CFLAGS = -std=c11 -Og -g $(INCLUDE)
+CFLAGS = -std=c11 -Og -g $(INCLUDE) -Wall -Wextra -Wno-unused-parameter
 #CFLAGS = -std=c11 -O2 $(INCLUDE)
 LFLAGS = $(CFLAGS)
 LIBS   = -lopen-pal -lucp 
