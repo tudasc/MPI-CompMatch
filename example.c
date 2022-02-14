@@ -28,57 +28,6 @@
  #include "ompi/mca/osc/ucx/osc_ucx_request.h"
  */
 
-// from Openmpi:
-static inline int get_dynamic_win_info(uint64_t remote_addr, ompi_osc_ucx_module_t *module,
-                                       ucp_ep_h ep, int target) {
-    ucp_rkey_h state_rkey = (module->state_info_array)[target].rkey;
-    uint64_t remote_state_addr = (module->state_info_array)[target].addr + OSC_UCX_STATE_DYNAMIC_WIN_CNT_OFFSET;
-    size_t len = sizeof(uint64_t) + sizeof(ompi_osc_dynamic_win_info_t) * OMPI_OSC_UCX_ATTACH_MAX;
-    char *temp_buf = malloc(len);
-    ompi_osc_dynamic_win_info_t *temp_dynamic_wins;
-    uint64_t win_count;
-    int contain, insert = -1;
-    ucs_status_t status;
-    int ret;
-
-    if ((module->win_info_array[target]).rkey_init == true) {
-        ucp_rkey_destroy((module->win_info_array[target]).rkey);
-        (module->win_info_array[target]).rkey_init = false;
-    }
-
-    status = ucp_get_nbi(ep, (void *)temp_buf, len, remote_state_addr, state_rkey);
-    if (status != UCS_OK && status != UCS_INPROGRESS) {
-        //OSC_UCX_VERBOSE(1, "ucp_get_nbi failed: %d", status);
-        return -1;
-    }
-
-    ret = opal_common_ucx_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
-    if (ret != 0) {
-        return ret;
-    }
-
-    memcpy(&win_count, temp_buf, sizeof(uint64_t));
-    assert(win_count > 0 && win_count <= OMPI_OSC_UCX_ATTACH_MAX);
-
-    temp_dynamic_wins = (ompi_osc_dynamic_win_info_t *)(temp_buf + sizeof(uint64_t));
-    contain = ompi_osc_find_attached_region_position(temp_dynamic_wins, 0, win_count,
-                                                     remote_addr, 1, &insert);
-    assert(contain >= 0 && (uint64_t)contain < win_count);
-
-    status = ucp_ep_rkey_unpack(ep, temp_dynamic_wins[contain].rkey_buffer,
-                                &((module->win_info_array[target]).rkey));
-    if (status != UCS_OK) {
-        //OSC_UCX_VERBOSE(1, "ucp_ep_rkey_unpack failed: %d", status);
-        return -1;
-    }
-
-    (module->win_info_array[target]).rkey_init = true;
-
-    free(temp_buf);
-
-    return status;
-}
-
 // from openucx doku:
 void empty_function(void *request, ucs_status_t status) {
 	// callback if flush is completed
@@ -102,6 +51,7 @@ ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
 	}
 }
 
+
 /* ************************************************************************ */
 /*  main                                                                    */
 /* ************************************************************************ */
@@ -111,48 +61,65 @@ int main(int argc, char **argv) {
 //Initialisiere Alle Prozesse
 	MPI_Init(&argc, &argv);
 
-	int send_list[2] = { 1, 1 };
-	int recv_list[2] = { 1, 1 };
-
-	struct global_information *global_info = Init(&send_list, &recv_list);
-
 	int rank, numtasks;
-
-
-	MPI_Win_attach(global_info->win, &rank, sizeof(int));
-	MPI_Win_attach(global_info->win, &numtasks, sizeof(int));
-
-
-
 // Welchen rang habe ich?
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 // wie viele Tasks gibt es?
 	MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
 
+	MPI_Win win;
+// create some MPI win, to properly initialize the RDMA component
+	// we will use the ucp endpoints of this win for all RDMA operations
 
-	for (int r = 0; r < numtasks; ++r) {
-		if(global_info->matching_queues[r]!=NULL)
-		MPI_Win_attach(global_info->win, global_info->matching_queues[r],
-							1 * sizeof(struct matching_queue_entry));
-
-	}
 
 	printf("Rank %i starts\n", rank);
+
+	MPI_Win_create(&rank, sizeof(int), 1, MPI_INFO_NULL, MPI_COMM_WORLD, &win);
 
 	int *buffer = malloc(N * sizeof(int));
 	//typedef struct ompi_win_t *MPI_Win;
 
 	if (rank == 0) {
 
-		struct recv_info* info = match_Receive(global_info, buffer, N *sizeof(int), MPI_BYTE,1, 42, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
 		for (int i = 0; i < N; ++i) {
 			buffer[i] = rank * i;
 		}
 
-		start_Receive(global_info, info);
-		end_Receive(global_info, info);
-		//free(info);
+		// receive RKEY
+
+		MPI_Status mpi_status;
+		MPI_Probe(1, 42, MPI_COMM_WORLD, &mpi_status);
+
+	 	int rkey_size;
+		MPI_Get_count(&mpi_status, MPI_BYTE, &rkey_size);
+		void* rkey_buffer = malloc(rkey_size);
+
+		printf("Receive Key, size:%d\n",rkey_size);
+
+		MPI_Recv(rkey_buffer, rkey_size, MPI_BYTE, 1, 42, MPI_COMM_WORLD, &mpi_status);
+
+		uint64_t remote_addr;
+
+		MPI_Recv(&remote_addr, sizeof(uint64_t), MPI_BYTE, 1, 1337, MPI_COMM_WORLD, &mpi_status);
+
+		int target =1;
+		ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
+		ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, target);
+	 	ucp_rkey_h rkey;
+
+	 	//unpack rkey
+	 	ucs_status_t status=ucp_ep_rkey_unpack(ep,rkey_buffer,&rkey);
+	 	assert(status==UCS_OK &&"ERROR in unpacking the RKEY");
+
+		free(rkey_buffer);
+
+		//now we can perform RDMA get:
+		printf("Perform RDMA (get)\n");
+
+		status = ucp_get_nbi(ep, buffer, N*sizeof(int), remote_addr,
+					rkey);
+
+		blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
 
 
 
@@ -162,19 +129,65 @@ int main(int argc, char **argv) {
 		}
 		printf("\n");
 
+		MPI_Barrier(MPI_COMM_WORLD);// other rank may free mem
+
+
 	} else {
-		struct send_info* info = match_send(global_info, buffer, sizeof(int)*N, MPI_BYTE, 0, 42, MPI_COMM_WORLD);
 
 		for (int i = 0; i < N; ++i) {
 			buffer[i] = rank * i;
 		}
-		begin_send(global_info, info);
-		end_send(global_info, info);
-		//free(info);
+
+		// send
+
+		// prepare buffer for RDMA access:
+		ucp_mem_map_params_t mem_params;
+		ucp_mem_attr_t mem_attrs;
+		ucs_status_t status;
+		// init mem params
+		memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
+
+		//TODO check that the mca_osc_ucx_component is a global var
+		ucp_context_h context = mca_osc_ucx_component.ucp_context;
+
+		ucp_mem_h mem_handle;
+
+		mem_params.address = buffer;
+		mem_params.length = N * sizeof(int);
+		// we need to tell ucx what fields are valid
+		mem_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS
+				| UCP_MEM_MAP_PARAM_FIELD_LENGTH;
+
+		status = ucp_mem_map(context, &mem_params, &mem_handle);
+	 assert(status == UCS_OK && "Error in register mem for RDMA operation");
+
+	 	 void* rkey_buffer;
+	 	 size_t rkey_size;
+
+	 	 // pack a remote memory key
+		status = ucp_rkey_pack(context,mem_handle,&rkey_buffer,&rkey_size);
+		assert(status == UCS_OK && "Error in register mem for RDMA operation");
+
+	 	 printf("Packed Key, size:%lu\n",rkey_size);
+
+	 	 MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, 0, 42, MPI_COMM_WORLD);
+	 	 // where the remote can access
+	 	MPI_Send(&buffer, sizeof(uint64_t), MPI_BYTE, 0, 1337, MPI_COMM_WORLD);
+
+
+	 	 // the other process now has the key
+	 	 ucp_rkey_buffer_release(rkey_buffer);
+
+
+MPI_Barrier(MPI_COMM_WORLD);
+		//ONLY AFTER THE FACT:
+		ucp_mem_unmap(context,mem_handle);
+
 	}
 
-
 	printf("%i: Done\n", rank);
+
+	MPI_Win_free(&win);
 
 	MPI_Finalize();
 	return 0;
@@ -187,13 +200,6 @@ void RDMA_Get(void *buffer, size_t size, int target,
 	// we know displacement unit
 	uint64_t remote_addr = (module->win_info_array[target]).addr
 			+ target_displacement;
-
-	if (module->flavor == MPI_WIN_FLAVOR_DYNAMIC) {
-		ucs_status_t stat = get_dynamic_win_info(remote_addr, module, ep, target);
-	        if (stat != UCS_OK) {
-	            return ;
-	        }
-	    }
 
 	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
 
@@ -215,13 +221,6 @@ void RDMA_Put(void *buffer, size_t size, int target,
 	// we know displacement unit
 	uint64_t remote_addr = (module->win_info_array[target]).addr
 			+ target_displacement;
-
-	if (module->flavor == MPI_WIN_FLAVOR_DYNAMIC) {
-		ucs_status_t stat = get_dynamic_win_info(remote_addr, module, ep, target);
-	        if (stat != UCS_OK) {
-	            return ;
-	        }
-	    }
 
 	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
 
@@ -273,14 +272,15 @@ struct global_information* Init(int *send_list, int *recv_list) {
 			result->remote_matching_queue_addresses[i] = 0;
 
 		} else {
-			int this_size=recv_list[i];
-			printf("%d: Allocate Queue Size %d for msgs from rank %d\n",rank,this_size,i);
+			int this_size = recv_list[i];
+			printf("%d: Allocate Queue Size %d for msgs from rank %d\n", rank,
+					this_size, i);
 			result->local_matching_queue_count[i] = 0;
 			result->remote_matching_queue_count[i] = 0;
 			result->local_matching_queue_size[i] = this_size;
 			result->remote_matching_queue_size[i] = send_list[i]; //TODO maybe communicate with other rank?
-			result->matching_queues[i] = calloc(
-					this_size, sizeof(struct matching_queue_entry));
+			result->matching_queues[i] = calloc(this_size,
+					sizeof(struct matching_queue_entry));
 
 //			MPI_Win_attach(result->win, result->matching_queues[i],
 //					this_size * sizeof(struct matching_queue_entry));
@@ -308,12 +308,14 @@ struct send_info* match_send(struct global_information *global_info, void *buf,
 		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
 	assert(comm==MPI_COMM_WORLD);
 	assert(datatype==MPI_BYTE);
-	assert(global_info->remote_matching_queue_size[dest]>global_info->remote_matching_queue_count[dest]);
+	assert(
+			global_info->remote_matching_queue_size[dest]
+					> global_info->remote_matching_queue_count[dest]);
 
-	struct send_info* info=malloc(sizeof (struct send_info));
+	struct send_info *info = malloc(sizeof(struct send_info));
 
-	info->flag=0;
-	info->dest=dest;
+	info->flag = 0;
+	info->dest = dest;
 
 	MPI_Aint remote_queue_base =
 			global_info->remote_matching_queue_addresses[dest];
@@ -321,11 +323,10 @@ struct send_info* match_send(struct global_information *global_info, void *buf,
 			+ (sizeof(struct matching_queue_entry)
 					* global_info->remote_matching_queue_count[dest]);
 
-	info->flag_addr=remote_queue_pos;
-					//TODO possible double attach
+	info->flag_addr = remote_queue_pos;
+	//TODO possible double attach
 	MPI_Win_attach(global_info->win, buf, count);
 	MPI_Win_attach(global_info->win, &info, sizeof(int));
-
 
 	info->remote_entry.flag = 0;
 	info->remote_entry.tag = tag;
@@ -333,54 +334,57 @@ struct send_info* match_send(struct global_information *global_info, void *buf,
 	MPI_Get_address(&info->flag, &info->remote_entry.flag_addr);
 	info->remote_entry.size = count;
 
-RDMA_Put(&info->remote_entry, sizeof(struct matching_queue_entry), dest, remote_queue_pos, global_info->win);
+	RDMA_Put(&info->remote_entry, sizeof(struct matching_queue_entry), dest,
+			remote_queue_pos, global_info->win);
 
-global_info->remote_matching_queue_count[dest]++;
+	global_info->remote_matching_queue_count[dest]++;
 
-return info;
+	return info;
 
 }
 
-void begin_send(struct global_information *global_info,struct send_info* info){
-	info->remote_entry.flag =DATA_READY_TO_SEND;
-	RDMA_Put(&info->remote_entry.flag, sizeof(int), info->dest, info->flag_addr, global_info->win);
+void begin_send(struct global_information *global_info, struct send_info *info) {
+	info->remote_entry.flag = DATA_READY_TO_SEND;
+	RDMA_Put(&info->remote_entry.flag, sizeof(int), info->dest, info->flag_addr,
+			global_info->win);
 }
 
-
-void end_send(struct global_information *global_info,struct send_info* info){
+void end_send(struct global_information *global_info, struct send_info *info) {
 	//nothing to do
 
-	spin_wait(&info->flag,DATA_RECEIVED);
+	spin_wait(&info->flag, DATA_RECEIVED);
 
 }
 
-struct recv_info* match_Receive(struct global_information *global_info,void *buf, int count, MPI_Datatype datatype, int source, int tag,
-        MPI_Comm comm, MPI_Status *status){
+struct recv_info* match_Receive(struct global_information *global_info,
+		void *buf, int count, MPI_Datatype datatype, int source, int tag,
+		MPI_Comm comm, MPI_Status *status) {
 	assert(comm==MPI_COMM_WORLD);
 	assert(datatype==MPI_BYTE);
 
-	struct recv_info* info = malloc(sizeof(struct recv_info));
-
-
+	struct recv_info *info = malloc(sizeof(struct recv_info));
 
 	// currently ther will be only one op, so we will math this
 
-	info->dest=source;
-	info->matching_entry= &global_info->matching_queues[source][0];//TODO IMPLEMENT ACTUAL MESSAGE MATCHING
-	info->data_buf=buf;
+	info->dest = source;
+	info->matching_entry = &global_info->matching_queues[source][0]; //TODO IMPLEMENT ACTUAL MESSAGE MATCHING
+	info->data_buf = buf;
 
-return info;
+	return info;
 }
 
-void start_Receive(struct global_information *global_info,struct recv_info *info){
+void start_Receive(struct global_information *global_info,
+		struct recv_info *info) {
 
 	spin_wait(&info->matching_entry->flag, DATA_READY_TO_SEND);
 
-	RDMA_Get(info->data_buf, info->matching_entry->size, info->dest, info->matching_entry->data_addr, global_info->win);
+	RDMA_Get(info->data_buf, info->matching_entry->size, info->dest,
+			info->matching_entry->data_addr, global_info->win);
 
 }
 
-void end_Receive(struct global_information *global_info,struct recv_info *info){
-	info->matching_entry->flag=DATA_RECEIVED;
-	RDMA_Put(&info->matching_entry->flag, sizeof(int), info->dest, info->matching_entry->flag_addr, global_info->win);
+void end_Receive(struct global_information *global_info, struct recv_info *info) {
+	info->matching_entry->flag = DATA_RECEIVED;
+	RDMA_Put(&info->matching_entry->flag, sizeof(int), info->dest,
+			info->matching_entry->flag_addr, global_info->win);
 }
