@@ -304,6 +304,8 @@ struct global_information* Init(int *send_list, int *recv_list) {
 
 //TODO  refactor global to be a global var?
 
+//TODO pack the rkey and send it to remote alongside the local address
+
 //TODO get_type_extend benutzen um andere types als byte zu erlauben
 struct send_info* match_send(struct global_information *global_info, void *buf,
 		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
@@ -344,6 +346,7 @@ struct send_info* match_send(struct global_information *global_info, void *buf,
 
 }
 
+
 void begin_send(struct global_information *global_info, struct send_info *info) {
 	info->remote_entry.flag = DATA_READY_TO_SEND;
 	RDMA_Put(&info->remote_entry.flag, sizeof(int), info->dest, info->flag_addr,
@@ -374,6 +377,8 @@ struct recv_info* match_Receive(struct global_information *global_info,
 	return info;
 }
 
+
+//TODO unpack the rkey
 void start_Receive(struct global_information *global_info,
 		struct recv_info *info) {
 
@@ -389,3 +394,5 @@ void end_Receive(struct global_information *global_info, struct recv_info *info)
 	RDMA_Put(&info->matching_entry->flag, sizeof(int), info->dest,
 			info->matching_entry->flag_addr, global_info->win);
 }
+
+//TODO clean up all used ressources
