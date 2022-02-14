@@ -60,7 +60,8 @@ int* local_matching_queue_size;
 int* remote_matching_queue_size;
 
 MPI_Aint* remote_matching_queue_addresses;
-ompi_win_t * win; // same as: MPI_Win win;
+//ompi_win_t * win; // same as: MPI_Win win;
+MPI_Win win;
 };
 
 void spin_wait(int* flag, int condition){
@@ -87,7 +88,7 @@ void spin_wait(int* flag, int condition){
 
 struct global_information* Init(int *send_list, int *recv_list);
 
-struct send_info* match_send(struct global_information *global_info, const void *buf,
+struct send_info* match_send(struct global_information *global_info, void *buf,
 		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) ;
 
 void begin_send(struct global_information *global_info,struct send_info* info);
