@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
 		printf("\n");
 
 	} else {
-		struct send_info* info = match_send(global_info, buffer, sizeof(int)*N, MPI_BYTE, 1, 42, MPI_COMM_WORLD);
+		struct send_info* info = match_send(global_info, buffer, sizeof(int)*N, MPI_BYTE, 0, 42, MPI_COMM_WORLD);
 
 		for (int i = 0; i < N; ++i) {
 			buffer[i] = rank * i;
@@ -226,7 +226,7 @@ struct send_info* match_send(struct global_information *global_info, const void 
 		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
 	assert(comm==MPI_COMM_WORLD);
 	assert(datatype==MPI_BYTE);
-	assert(global_info->remote_matching_queue_size[dest]<global_info->remote_matching_queue_count[dest]);
+	assert(global_info->remote_matching_queue_size[dest]>global_info->remote_matching_queue_count[dest]);
 
 	struct send_info* info=malloc(sizeof (struct send_info));
 
