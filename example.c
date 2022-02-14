@@ -130,6 +130,7 @@ int main(int argc, char **argv) {
 		printf("\n");
 
 		MPI_Barrier(MPI_COMM_WORLD);// other rank may free mem
+		ucp_rkey_destroy(rkey);
 
 
 	} else {
