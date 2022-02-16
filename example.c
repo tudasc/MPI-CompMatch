@@ -170,7 +170,10 @@ int main(int argc, char **argv) {
 
 				start_Receive(global_info, info);
 				end_Receive(global_info, info);
-				//free(info);
+
+				// free ressources
+				ucp_rkey_destroy(info->rkey);
+				free(info);
 
 
 		// after rdma get
@@ -188,7 +191,8 @@ int main(int argc, char **argv) {
 				end_send(global_info, 0);
 	}
 
-
+	free(buffer);
+	finalize(global_info);
 	MPI_Finalize();
 	return 0;
 }
@@ -476,6 +480,10 @@ void end_send(struct global_information *global_info, const int send_ID) {
 
 	spin_wait_for(&info->flag, DATA_RECEIVED);
 
+	ucp_context_h context = mca_osc_ucx_component.ucp_context;
+	//TODO proper release of ressources at the end
+	ucp_mem_unmap(context,info->mem_handle);
+
 }
 
 struct recv_info* match_Receive(struct global_information *global_info,
@@ -527,9 +535,12 @@ void end_Receive(struct global_information *global_info, struct recv_info *info)
 	info->matching_entry->flag = DATA_RECEIVED;
 	RDMA_Put(&info->matching_entry->flag, sizeof(int), info->dest,
 			info->matching_entry->flag_addr, global_info->win);
+
 }
 
 void finalize(struct global_information *global_info) {
+
+	//TODO release all ressources
 
 	MPI_Win_free(&global_info->win);
 	free(global_info->local_matching_queue_count);
