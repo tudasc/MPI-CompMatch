@@ -33,6 +33,7 @@ void RDMA_Get(void*buffer,size_t size,int target,MPI_Aint target_displacement,MP
 #define DATA_RECEIVED 1<< 2
 #define CHECK_FOR_PREVIOUS_RKEY 1<< 3
 #define MATCHING_REQUEST_INITIALIZED 1<< 4
+#define SEND_OP_FINISHED 1<< 5
 
 struct matching_queue_entry{
 	int flag;
@@ -127,5 +128,10 @@ void start_Receive(struct global_information *global_info,struct recv_info *info
 
 
 void end_Receive(struct global_information *global_info,struct recv_info *info);
+
+void free_receive_info(struct recv_info *info){
+	ucp_rkey_destroy(info->rkey);
+	free(info);
+}
 
 #endif /* LOW_LEVEL_H_ */

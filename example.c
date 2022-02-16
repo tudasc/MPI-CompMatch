@@ -176,8 +176,7 @@ int main(int argc, char **argv) {
 			end_Receive(global_info, info);
 		}
 		// free ressources
-		ucp_rkey_destroy(info->rkey);
-		free(info);
+		free_receive_info(info);
 
 		// after rdma get
 		for (int i = 0; i < N; ++i) {
