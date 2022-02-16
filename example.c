@@ -480,10 +480,6 @@ void end_send(struct global_information *global_info, const int send_ID) {
 
 	spin_wait_for(&info->flag, DATA_RECEIVED);
 
-	ucp_context_h context = mca_osc_ucx_component.ucp_context;
-	//TODO proper release of ressources at the end
-	ucp_mem_unmap(context,info->mem_handle);
-
 }
 
 struct recv_info* match_Receive(struct global_information *global_info,
@@ -540,7 +536,25 @@ void end_Receive(struct global_information *global_info, struct recv_info *info)
 
 void finalize(struct global_information *global_info) {
 
-	//TODO release all ressources
+	//TODO this should be a param instead of a define
+#define MAX_NUM_OF_SENDS 1
+	//release all ressources
+	int rank;
+		MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+		ucp_context_h context = mca_osc_ucx_component.ucp_context;
+
+	for (int i = 0; i < MAX_NUM_OF_SENDS; ++i) {
+		struct send_info *info =
+					&(((struct send_info**) global_info->matching_queues)[rank][i]);
+
+		// otherwise op was not used
+		if(info->remote_entry.flag!=0){
+			ucp_mem_unmap(context,info->mem_handle);
+		}
+	}
+
+
 
 	MPI_Win_free(&global_info->win);
 	free(global_info->local_matching_queue_count);
