@@ -173,7 +173,6 @@ int main(int argc, char **argv) {
 				//free(info);
 
 
-
 		// after rdma get
 				for (int i = 0; i < N; ++i) {
 					printf("%i,", buffer[i]);
@@ -199,9 +198,10 @@ void RDMA_Get(void *buffer, size_t size, int target,
 	ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
 	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, target);
 	// we know displacement unit
-	uint64_t remote_addr = (module->win_info_array[target]).addr
-			+ target_displacement;
-
+	//uint64_t remote_addr = (module->win_info_array[target]).addr
+	//		+ target_displacement;
+	// we will give the direct address
+	uint64_t remote_addr=target_displacement;
 	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
 
 	ucs_status_t status = ucp_get_nbi(ep, (void*) buffer, size, remote_addr,
@@ -220,8 +220,10 @@ void RDMA_Put(void *buffer, size_t size, int target,
 	ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
 	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, target);
 	// we know displacement unit
-	uint64_t remote_addr = (module->win_info_array[target]).addr
-			+ target_displacement;
+	//uint64_t remote_addr = (module->win_info_array[target]).addr
+	//		+ target_displacement;
+	// we will give the direct address
+	uint64_t remote_addr=target_displacement;
 
 	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
 
@@ -446,11 +448,10 @@ void match_send(struct global_information *global_info, int send_ID, void *buf,
 
 	}
 
-	printf("Printf debug Marker befire Put remote queue entry\n");
 	//TODO we need less RDMa transfer if only the flag needs to be updated
 	RDMA_Put(&info->remote_entry, sizeof(struct matching_queue_entry), dest,
 			info->flag_addr, global_info->win);
-	printf("Printf debug Marker after put\n");
+
 
 	return;
 
