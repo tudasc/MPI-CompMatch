@@ -16,16 +16,19 @@ LFLAGS = $(CFLAGS)
 LIBS   = -lopen-pal -lucp 
 
 TGTS = example
-OBJS = example.o
+OBJS = example.o low-level.o
 
 # Targets ...
 all: $(TGTS)
 
-example: $(OBJS2) example.o
-	$(MPICC) $(LFLAGS) -fopenmp -o $@ $(OBJS) $(LIBS)
+example: $(OBJS)
+	$(MPICC) $(LFLAGS) -o $@ $(OBJS) $(LIBS)
 	
+low-level.o: low-level.c 
+	$(MPICC) -c $(CFLAGS) $<
+
 example.o: example.c 
-	$(MPICC) -c $(CFLAGS) -fopenmp $<
+	$(MPICC) -c $(CFLAGS) $<
 
 clean:
 	$(RM) $(OBJS)
