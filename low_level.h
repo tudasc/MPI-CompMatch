@@ -31,6 +31,8 @@ void RDMA_Get(void*buffer,size_t size,int target,MPI_Aint target_displacement,MP
 #define DATA_READY_TO_SEND 1
 #define PREVIOUS_RKEY_IS_VALID 1 << 1
 #define DATA_RECEIVED 1<< 2
+#define CHECK_FOR_PREVIOUS_RKEY 1<< 3
+#define MATCHING_REQUEST_INITIALIZED 1<< 4
 
 struct matching_queue_entry{
 	int flag;
@@ -44,6 +46,7 @@ struct matching_queue_entry{
 struct send_info{
 	int flag;// set by remote
 	int dest;
+	ucp_mem_h mem_handle;// ucp mem handle of the data buffer
 	MPI_Aint flag_addr;// where the remote matching_queue_entry starts
 	struct matching_queue_entry remote_entry;// copy of remote's matching_queue_entry (used as buffer to push it to remote)
 };
@@ -51,6 +54,7 @@ struct send_info{
 struct recv_info{
 	int dest;// source rank == dest of RDMA fetch
 	struct matching_queue_entry* matching_entry;// ptr to the matching entry
+	ucp_rkey_h rkey; // rkey to access remote data
 	void* data_buf;// ptr to data buf
 };
 
@@ -70,6 +74,14 @@ MPI_Win win;
 
 void spin_wait_for(int* flag, int condition){
 	while(*flag!=condition){
+		//TODO sleep
+	}
+	return;
+}
+
+// and flag and condition
+void spin_wait_for_and(int* flag, int condition){
+	while(!((*flag)&condition)){
 		//TODO sleep
 	}
 	return;
@@ -98,14 +110,15 @@ void spin_wait_until_not(int* flag, int condition){
 // finalize
 
 struct global_information* Init(int *send_list, int *recv_list);
+void finalize(struct global_information *global_info) ;
 
-struct send_info* match_send(struct global_information *global_info, void *buf,
+void match_send(struct global_information *global_info, const int send_ID,void *buf,
 		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) ;
 
-void begin_send(struct global_information *global_info,struct send_info* info);
+void begin_send(struct global_information *global_info,const int send_ID);
 
 
-void end_send(struct global_information *global_info,struct send_info* info);
+void end_send(struct global_information *global_info,const int send_ID);
 
 struct recv_info* match_Receive(struct global_information *global_info,void *buf, int count, MPI_Datatype datatype, int source, int tag,
         MPI_Comm comm, MPI_Status *status);
