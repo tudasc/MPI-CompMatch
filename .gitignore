@@ -1,0 +1,8 @@
+# objis
+*.o
+#executable
+example
+#IDE specific
+.project
+.cproject
+.settings
