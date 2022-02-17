@@ -41,6 +41,36 @@ ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
 	}
 }
 
+
+void RDMA_Get_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr){
+	ucs_status_t status = ucp_get_nbi(ep, (void*) buffer, size, remote_addr,
+				rkey);
+
+		if (status != UCS_OK && status != UCS_INPROGRESS) {
+			printf("ERROR in RDMA GET\n");
+		}
+
+		// For Testing: use blocking flush:
+		blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
+
+
+}
+
+void RDMA_Put_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr){
+	ucs_status_t status = ucp_put_nbi(ep, (void*) buffer, size, remote_addr,
+				rkey);
+
+		if (status != UCS_OK && status != UCS_INPROGRESS) {
+			printf("ERROR in RDMA PUT\n");
+		}
+
+		// For Testing: use blocking flush:
+		blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
+
+
+}
+
+
 void RDMA_Get(void *buffer, size_t size, int target,
 		MPI_Aint target_displacement, MPI_Win win) {
 	ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;

@@ -76,10 +76,12 @@ struct global_information {
 
 static inline void spin_wait_for(int *flag, int condition) {
 	while (*flag != condition) {
-		//TODO sleep
+		//TODO sleep?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 	}
 	return;
 }
+
 
 // and flag and condition
 static inline void spin_wait_for_and(int *flag, int condition) {
@@ -95,6 +97,9 @@ static inline void spin_wait_until_not(int *flag, int condition) {
 	}
 	return;
 }
+
+void RDMA_Get_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr);
+void RDMA_Put_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr);
 
 // Init
 
