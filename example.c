@@ -36,15 +36,19 @@ void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 	if (info->flag == READY_TO_RECEIVE) {
 		info->crosstalk_flag = SEND;
 		// start rdma data transfer
+#ifdef STATISTIC_PRINTING
 		printf("send pushes data\n");
+#endif
 		RDMA_Put_test(buf, size, info->remote_data_rkey, ep,
 				info->remote_data_addr);
-		info->flag = SEND;
+
+		info->flag=0;// the send is done at our side
+
 		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
 				info->remote_flag_addr);
 
 	} else {
-		info->flag = READY_TO_SEND;
+		info->flag = READY_TO_SEND;// doesnt matter, if this "corrupts" the flag, only he receiver has to detect crosstalk
 		info->crosstalk_flag = READY_TO_SEND;
 		// give him the flag that we are ready: he will RDMA get the data
 		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
@@ -55,16 +59,17 @@ void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 
 void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 	if (info->crosstalk_flag == READY_TO_SEND) {
+#ifdef STATISTIC_PRINTING
 		if (info->flag == READY_TO_RECEIVE) {
+
 			printf("Crosstalk on send\n");
 			// the receiver will get the data
 		}
+#endif
 		spin_wait_for(&info->flag, DATA_RECEIVED);
 	}
 	// else: nothing to do, we have Puted the content
 	// TODO use proper non-blocking
-
-	info->flag=0;
 		info->crosstalk_flag=0;
 
 }
@@ -74,17 +79,18 @@ void b_recv(struct matching_info* info, void *buf, size_t size, ucp_ep_h ep) {
 	if (info->flag == READY_TO_SEND) {
 		//info.crosstalk_flag = 0;
 		// start rdma data transfer
+#ifdef STATISTIC_PRINTING
 		printf("recv fetches data\n");
+#endif
 		RDMA_Get_test(buf, size, info->remote_data_rkey, ep,
 				info->remote_data_addr);
-		info->flag = DATA_RECEIVED;
+		info->flag = 0;// recv is done at our side
 		info->crosstalk_flag=DATA_RECEIVED;
 		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
 				info->remote_flag_addr);
 
-
 	} else {
-		info->flag = READY_TO_RECEIVE;
+		//info->flag = READY_TO_RECEIVE;
 		info->crosstalk_flag = READY_TO_RECEIVE;
 		// give him the flag that we are ready: he will RDMA get the data
 		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
@@ -96,20 +102,24 @@ void b_recv(struct matching_info* info, void *buf, size_t size, ucp_ep_h ep) {
 void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 	if (info->crosstalk_flag == READY_TO_RECEIVE) {
 		if (info->flag == READY_TO_SEND) {
+#ifdef STATISTIC_PRINTING
 			printf("Crosstalk on recv\n");
+#endif
 			//we will fetch the data
 			b_recv(info, buf, size, ep);
 		} else {
 			// wait for content to arrive
 			//spin_wait_for(&info->flag, SEND);
-			while (info->flag != SEND) {
+			// wait until either the other rank has finished transfer, or we have initiated the transfer ourselves
+			while (info->flag != SEND || info->crosstalk_flag==DATA_RECEIVED) {
 					//TODO sleep?
 					ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
-					// need to double check, that the other thread havend crosstalked
+					// need to double check, that the other thread havent crosstalked
 					if(info->flag==READY_TO_SEND){
+#ifdef STATISTIC_PRINTING
 						printf("second stage Crosstalk on recv\n");
+#endif
 						b_recv(info, buf, size, ep);
-						info->flag=SEND;
 					}
 				}
 		}
@@ -117,14 +127,19 @@ void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 	// else: nothing to do, we have gotten the content via rdma get
 	// TODO use proper non-blocking
 
-	info->flag=0;
 	info->crosstalk_flag=0;
 
 }
 
-#define N 100
+//#define STATISTIC_PRINTING
 
-#define NUM_ITERS 10
+#define BUFFER_SIZE 10000
+#define NUM_ITERS 1000
+
+#define N BUFFER_SIZE
+
+
+
 void check_buffer_content(int* buf,int n){
 	int not_correct=0;
 
@@ -272,8 +287,9 @@ void use_self_implemented_comm() {
 
 			b_recv(&info, buffer, sizeof(int) * N, ep);
 			e_recv(&info, buffer, sizeof(int) * N, ep);
-
+#ifdef STATISTIC_PRINTING
 			check_buffer_content(buffer,n);
+#endif
 		}
 
 	} else {
@@ -323,7 +339,9 @@ void use_standard_comm() {
 
 			MPI_Recv(buffer, sizeof(int) * N, MPI_BYTE, 1, 42,
 			MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef STATISTIC_PRINTING
 			check_buffer_content(buffer,n);
+#endif
 		}
 
 		// after comm
