@@ -354,8 +354,9 @@ void use_self_implemented_comm() {
 	//printf("Rank %d: buffer: %p remote:%p\n",rank,buffer,info.remote_data_addr);
 	//printf("Rank %d: flagbuffer: %p flagremote:%p\n",rank,&info,info.remote_flag_addr);
 
-	//TODO should not be necessary
-	MPI_Barrier(MPI_COMM_WORLD);
+	//not  necessary
+	// but nice for attaching the debugger
+	//MPI_Barrier(MPI_COMM_WORLD);
 
 	if (rank == 0) {
 
@@ -515,6 +516,7 @@ int main(int argc, char **argv) {
 			+ (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 
 	printf("Self Implemented:    %f s \n", time);
+	MPI_Barrier(MPI_COMM_WORLD);
 	gettimeofday(&start_time, NULL); /*  start timer         */
 	use_standard_comm();
 	gettimeofday(&stop_time, NULL); /*  stop timer          */
@@ -522,7 +524,7 @@ int main(int argc, char **argv) {
 			+ (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 
 	printf("Standard:    %f s \n", time);
-
+	MPI_Barrier(MPI_COMM_WORLD);
 	gettimeofday(&start_time, NULL); /*  start timer         */
 		use_standard_comm();
 		gettimeofday(&stop_time, NULL); /*  stop timer          */
