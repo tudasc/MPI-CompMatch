@@ -12,6 +12,8 @@
 
 #include <execinfo.h>
 
+#include <math.h>
+
 /* ************************************************************************ */
 /*  main                                                                    */
 /* ************************************************************************ */
@@ -22,6 +24,8 @@
 
 #define SEND 3
 #define RECEIVED 4
+
+#define DUMMY_WLOAD_TIME = 10
 
 struct matching_info {
 	int flag;
@@ -98,7 +102,8 @@ void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 		int operation_number) {
 
-	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	//ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	// will call progres only if this is necessary
 
 	if (__builtin_expect(info->ucx_request_flag_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_flag_transfer);
@@ -165,7 +170,7 @@ void b_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 
 void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 		int operation_number) {
-	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	//ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
 	if (__builtin_expect(info->ucx_request_flag_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_flag_transfer);
@@ -202,9 +207,17 @@ void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 //#define STATISTIC_PRINTING
 
 #define BUFFER_SIZE 10000
-#define NUM_ITERS 1000
+#define NUM_ITERS 100000
 
 #define N BUFFER_SIZE
+
+void dummy_workload(double* buf){
+
+	for (int i = 0; i < N-1; ++i) {
+		buf[i]= sin(buf[i+1]);
+
+	}
+}
 
 void check_buffer_content(int *buf, int n) {
 	int not_correct = 0;
@@ -248,6 +261,8 @@ void use_self_implemented_comm() {
 	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, dest);
 
 	int *buffer = malloc(N * sizeof(int));
+	double *work_buffer = malloc(N * sizeof(double));
+	work_buffer[N-1]=0.6;
 
 	info_to_send.flag_buffer = 0;
 	info_to_send.flag = 0;
@@ -351,6 +366,7 @@ void use_self_implemented_comm() {
 			}
 
 			b_recv(&info, buffer, sizeof(int) * N, ep, n);
+			dummy_workload(work_buffer);
 			e_recv(&info, buffer, sizeof(int) * N, ep, n);
 #ifdef STATISTIC_PRINTING
 			check_buffer_content(buffer,n);
@@ -364,6 +380,7 @@ void use_self_implemented_comm() {
 				buffer[i] = rank * i * n;
 			}
 			b_send(&info, buffer, sizeof(int) * N, ep, n);
+			dummy_workload(work_buffer);
 			e_send(&info, buffer, sizeof(int) * N, ep, n);
 		}
 	}
@@ -384,6 +401,10 @@ void use_standard_comm() {
 // wie viele Tasks gibt es?
 	MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
 	int *buffer = malloc(N * sizeof(int));
+	double *work_buffer = malloc(N * sizeof(double));
+	work_buffer[N-1]=0.6;
+
+	MPI_Request req;
 
 	if (rank == 1) {
 
@@ -391,8 +412,10 @@ void use_standard_comm() {
 			for (int i = 0; i < N; ++i) {
 				buffer[i] = rank * i * n;
 			}
-			MPI_Send(buffer, sizeof(int) * N, MPI_BYTE, 0, 42,
-			MPI_COMM_WORLD);
+			MPI_Isend(buffer, sizeof(int) * N, MPI_BYTE, 0, 42,
+			MPI_COMM_WORLD,&req);
+			dummy_workload(work_buffer);
+			MPI_Wait(&req, MPI_STATUS_IGNORE);
 
 		}
 	} else {
@@ -402,8 +425,10 @@ void use_standard_comm() {
 				buffer[i] = rank * i * n;
 			}
 
-			MPI_Recv(buffer, sizeof(int) * N, MPI_BYTE, 1, 42,
-			MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			MPI_Irecv(buffer, sizeof(int) * N, MPI_BYTE, 1, 42,
+			MPI_COMM_WORLD,&req);
+			dummy_workload(work_buffer);
+			MPI_Wait(&req, MPI_STATUS_IGNORE);
 #ifdef STATISTIC_PRINTING
 			check_buffer_content(buffer,n);
 #endif
