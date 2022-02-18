@@ -19,13 +19,13 @@
  */
 
 // from openucx doku:
-void empty_function(void *request, ucs_status_t status) {
+void empty_function_in_low_level_c(void *request, ucs_status_t status) {
 	// callback if flush is completed
 }
 
 ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
 	void *request;
-	request = ucp_ep_flush_nb(ep, 0, empty_function);
+	request = ucp_ep_flush_nb(ep, 0, empty_function_in_low_level_c);
 	if (request == NULL) {
 		return UCS_OK;
 	} else if (UCS_PTR_IS_ERR(request)) {

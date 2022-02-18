@@ -16,6 +16,7 @@
 /*  main                                                                    */
 /* ************************************************************************ */
 
+//#define STATISTIC_PRINTING
 #define READY_TO_RECEIVE 1
 #define READY_TO_SEND 2
 
@@ -24,110 +25,177 @@
 
 struct matching_info {
 	int flag;
-	int crosstalk_flag;
+	int flag_buffer;
 	uint64_t remote_data_addr;
 	ucp_rkey_h remote_data_rkey;
 	uint64_t remote_flag_addr;
 	ucp_rkey_h remote_flag_rkey;
+	void *ucx_request_data_transfer;
+	void *ucx_request_flag_transfer;
 };
 
-void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
+static inline void spin_wait_geq(int *flag, int condition) {
+	while (*flag < condition) {
+		//TODO sleep?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	}
+	return;
+}
 
-	if (info->flag == READY_TO_RECEIVE) {
-		info->crosstalk_flag = SEND;
+void empty_function(void *request, ucs_status_t status) {
+	// callback if flush is completed
+}
+
+void wait_for_completion_blocking(void *request) {
+	assert(request!=NULL);
+	ucs_status_t status;
+	do {
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+		status = ucp_request_check_status(request);
+	} while (status == UCS_INPROGRESS);
+	ucp_request_free(request);
+}
+
+//operation_number*2= op has not started on remote
+//operation_number*2 +1= op has started on remote, 	we should initiate data transfer
+//operation_number*2 + 2= op has finished on remote
+
+void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
+		int operation_number) {
+
+	if (info->flag == operation_number * 2 + 1) {
+		// increment: signal that WE finish the operation on the remote
+		info->flag++;
+		// no possibility of data-race, the remote will wait for us to put the data
+		assert(info->flag == operation_number * 2 + 2);
 		// start rdma data transfer
 #ifdef STATISTIC_PRINTING
 		printf("send pushes data\n");
 #endif
-		RDMA_Put_test(buf, size, info->remote_data_rkey, ep,
-				info->remote_data_addr);
+		ucs_status_t status = ucp_put_nbi(ep, buf, size, info->remote_data_addr,
+				info->remote_data_rkey);
+		//ensure order:
+		status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
+		status = ucp_put_nbi(ep, &info->flag_buffer, sizeof(int),
+				 info->remote_flag_addr,info->remote_flag_rkey);
+		info->ucx_request_data_transfer = ucp_ep_flush_nb(ep, 0,empty_function);
 
-		info->flag=0;// the send is done at our side
-
-		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
-				info->remote_flag_addr);
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
 	} else {
-		info->flag = READY_TO_SEND;// doesnt matter, if this "corrupts" the flag, only he receiver has to detect crosstalk
-		info->crosstalk_flag = READY_TO_SEND;
+		info->flag_buffer = operation_number * 2 + 1;
 		// give him the flag that we are ready: he will RDMA get the data
-		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
-				info->remote_flag_addr);
+		ucs_status_t status = ucp_put_nbi(ep, &info->flag_buffer, sizeof(int),
+				info->remote_flag_addr, info->remote_flag_rkey);
+
+		info->ucx_request_flag_transfer = ucp_ep_flush_nb(ep, 0,empty_function);
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 	}
+}
+
+void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
+		int operation_number) {
+
+	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+
+	if (info->ucx_request_flag_transfer != NULL) {
+		wait_for_completion_blocking(info->ucx_request_flag_transfer);
+		info->ucx_request_flag_transfer = NULL;
+	}
+
+	// same for data transfer
+	if (info->ucx_request_data_transfer != NULL) {
+		wait_for_completion_blocking(info->ucx_request_data_transfer);
+		info->ucx_request_data_transfer = NULL;
+	}
+
+	// we need to wait until the op has finished on the remote before re-using the data buffer
+	spin_wait_geq(&info->flag, operation_number * 2 + 2);
 
 }
 
-void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
-	if (info->crosstalk_flag == READY_TO_SEND) {
-#ifdef STATISTIC_PRINTING
-		if (info->flag == READY_TO_RECEIVE) {
+void b_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
+		int operation_number) {
 
-			printf("Crosstalk on send\n");
-			// the receiver will get the data
-		}
-#endif
-		spin_wait_for(&info->flag, DATA_RECEIVED);
-	}
-	// else: nothing to do, we have Puted the content
-	// TODO use proper non-blocking
-		info->crosstalk_flag=0;
+	if (info->flag == operation_number * 2 + 1) {
 
-}
-
-void b_recv(struct matching_info* info, void *buf, size_t size, ucp_ep_h ep) {
-
-	if (info->flag == READY_TO_SEND) {
-		//info.crosstalk_flag = 0;
+		info->flag++; // recv is done at our side
+		// no possibility of data race, WE will advance the comm
+		assert(info->flag == operation_number * 2 + 2);
 		// start rdma data transfer
 #ifdef STATISTIC_PRINTING
 		printf("recv fetches data\n");
 #endif
-		RDMA_Get_test(buf, size, info->remote_data_rkey, ep,
-				info->remote_data_addr);
-		info->flag = 0;// recv is done at our side
-		info->crosstalk_flag=DATA_RECEIVED;
-		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
-				info->remote_flag_addr);
+		ucs_status_t status = ucp_get_nbi(ep, (void*) buf, size,
+				info->remote_data_addr, info->remote_data_rkey);
+		//TODO error checking in assertion?
+		if (status != UCS_OK && status != UCS_INPROGRESS) {
+			printf("ERROR in RDMA GET\n");
+		}
+		//ensure order:
+		status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
+		//TODO error checking in assertion?
+
+		info->flag_buffer = operation_number * 2 + 2;
+		status = ucp_put_nbi(ep, &info->flag_buffer, sizeof(int),
+				info->remote_flag_addr, info->remote_flag_rkey);
+		//TODO error checking in assertion?
+
+		info->ucx_request_data_transfer = ucp_ep_flush_nb(ep, 0,empty_function);
+
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
 	} else {
 		//info->flag = READY_TO_RECEIVE;
-		info->crosstalk_flag = READY_TO_RECEIVE;
-		// give him the flag that we are ready: he will RDMA get the data
-		RDMA_Put_test(&info->crosstalk_flag, sizeof(int), info->remote_flag_rkey, ep,
-				info->remote_flag_addr);
+		info->flag_buffer = operation_number * 2 + 1;
+		// give him the flag that we are ready: he will RDMA put the data
+		ucs_status_t status = ucp_put_nbi(ep, &info->flag_buffer, sizeof(int),
+				info->remote_flag_addr, info->remote_flag_rkey);
+		//TODO error checking in assertion?
+
+		info->ucx_request_flag_transfer = ucp_ep_flush_nb(ep, 0,empty_function);
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 	}
 
 }
 
-void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
-	if (info->crosstalk_flag == READY_TO_RECEIVE) {
-		if (info->flag == READY_TO_SEND) {
-#ifdef STATISTIC_PRINTING
-			printf("Crosstalk on recv\n");
-#endif
-			//we will fetch the data
-			b_recv(info, buf, size, ep);
-		} else {
-			// wait for content to arrive
-			//spin_wait_for(&info->flag, SEND);
-			// wait until either the other rank has finished transfer, or we have initiated the transfer ourselves
-			while (info->flag != SEND || info->crosstalk_flag==DATA_RECEIVED) {
-					//TODO sleep?
-					ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
-					// need to double check, that the other thread havent crosstalked
-					if(info->flag==READY_TO_SEND){
-#ifdef STATISTIC_PRINTING
-						printf("second stage Crosstalk on recv\n");
-#endif
-						b_recv(info, buf, size, ep);
-					}
-				}
-		}
-	}
-	// else: nothing to do, we have gotten the content via rdma get
-	// TODO use proper non-blocking
+void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
+		int operation_number) {
+	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
-	info->crosstalk_flag=0;
+	if (info->ucx_request_flag_transfer != NULL) {
+		wait_for_completion_blocking(info->ucx_request_flag_transfer);
+		info->ucx_request_flag_transfer = NULL;
+	}
+
+	// same for data transfer
+	if (info->ucx_request_data_transfer != NULL) {
+		wait_for_completion_blocking(info->ucx_request_data_transfer);
+		info->ucx_request_data_transfer = NULL;
+	}
+
+	spin_wait_geq(&info->flag, operation_number * 2 + 1);
+
+	if (info->flag < operation_number * 2 + 2) {
+		//printf("Flag %d, expected %d, op_num %d",info->flag, operation_number*2 +1)
+		assert(info->flag == operation_number * 2 + 1);
+		//CROSSTALK
+#ifdef STATISTIC_PRINTING
+		printf("crosstalk detected\n");
+#endif
+		// fetch the data
+		b_recv(info, buf, size, ep, operation_number);
+		// and block until transfer finished
+		if (info->ucx_request_data_transfer != NULL) {
+			wait_for_completion_blocking(info->ucx_request_data_transfer);
+			info->ucx_request_data_transfer = NULL;
+		}
+
+	}		// else: nothing to do, the op has finished
 
 }
 
@@ -138,25 +206,21 @@ void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep) {
 
 #define N BUFFER_SIZE
 
-
-
-void check_buffer_content(int* buf,int n){
-	int not_correct=0;
+void check_buffer_content(int *buf, int n) {
+	int not_correct = 0;
 
 	for (int i = 0; i < N; ++i) {
-		if(buf[i] != 1 * i * n){
+		if (buf[i] != 1 * i * n) {
 			not_correct++;
 		}
 	}
 
-	if (not_correct!=0){
-		printf("ERROR: %d: buffer has unexpected content\n",n);
+	if (not_correct != 0) {
+		printf("ERROR: %d: buffer has unexpected content\n", n);
 		//exit(-1);
 	}
 
 }
-
-
 
 #define tag_entry 42
 #define tag_rkey_data 43
@@ -185,14 +249,16 @@ void use_self_implemented_comm() {
 
 	int *buffer = malloc(N * sizeof(int));
 
-	info_to_send.crosstalk_flag = 0;
+	info_to_send.flag_buffer = 0;
 	info_to_send.flag = 0;
 	info_to_send.remote_data_addr = buffer;
 	info_to_send.remote_flag_addr = &info;
+	info_to_send.ucx_request_data_transfer = NULL;
+	info_to_send.ucx_request_flag_transfer = NULL;
 	MPI_Send(&info_to_send, sizeof(struct matching_info), MPI_BYTE, dest,
-			tag_entry, MPI_COMM_WORLD);
+	tag_entry, MPI_COMM_WORLD);
 	MPI_Recv(&info, sizeof(struct matching_info), MPI_BYTE, dest, tag_entry,
-			MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 	ucp_mem_h mem_handle_data;
 	ucp_mem_h mem_handle_flag;
@@ -224,7 +290,7 @@ void use_self_implemented_comm() {
 	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
 	MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, dest, tag_rkey_data,
-			MPI_COMM_WORLD);
+	MPI_COMM_WORLD);
 
 	// free temp buf
 	ucp_rkey_buffer_release(rkey_buffer);
@@ -246,7 +312,7 @@ void use_self_implemented_comm() {
 	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
 	MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, dest, tag_rkey_flag,
-			MPI_COMM_WORLD);
+	MPI_COMM_WORLD);
 
 	// free temp buf
 	ucp_rkey_buffer_release(rkey_buffer);
@@ -256,20 +322,19 @@ void use_self_implemented_comm() {
 	int count;
 	MPI_Probe(dest, tag_rkey_data, MPI_COMM_WORLD, &status);
 	MPI_Get_count(&status, MPI_BYTE, &count);
-	temp_buf = calloc(count,1);
+	temp_buf = calloc(count, 1);
 	MPI_Recv(temp_buf, count, MPI_BYTE, dest, tag_rkey_data, MPI_COMM_WORLD,
-			MPI_STATUS_IGNORE);
+	MPI_STATUS_IGNORE);
 	ucp_ep_rkey_unpack(ep, temp_buf, &info.remote_data_rkey);
 	free(temp_buf);
 
 	MPI_Probe(dest, tag_rkey_flag, MPI_COMM_WORLD, &status);
 	MPI_Get_count(&status, MPI_BYTE, &count);
-	temp_buf = calloc(count,1);
+	temp_buf = calloc(count, 1);
 	MPI_Recv(temp_buf, count, MPI_BYTE, dest, tag_rkey_flag, MPI_COMM_WORLD,
-			MPI_STATUS_IGNORE);
+	MPI_STATUS_IGNORE);
 	ucp_ep_rkey_unpack(ep, temp_buf, &info.remote_flag_rkey);
 	free(temp_buf);
-
 
 	//printf("Rank %d: buffer: %p remote:%p\n",rank,buffer,info.remote_data_addr);
 	//printf("Rank %d: flagbuffer: %p flagremote:%p\n",rank,&info,info.remote_flag_addr);
@@ -285,8 +350,8 @@ void use_self_implemented_comm() {
 				buffer[i] = rank * i * n;
 			}
 
-			b_recv(&info, buffer, sizeof(int) * N, ep);
-			e_recv(&info, buffer, sizeof(int) * N, ep);
+			b_recv(&info, buffer, sizeof(int) * N, ep, n);
+			e_recv(&info, buffer, sizeof(int) * N, ep, n);
 #ifdef STATISTIC_PRINTING
 			check_buffer_content(buffer,n);
 #endif
@@ -298,8 +363,8 @@ void use_self_implemented_comm() {
 			for (int i = 0; i < N; ++i) {
 				buffer[i] = rank * i * n;
 			}
-			b_send(&info, buffer, sizeof(int) * N, ep);
-			e_send(&info, buffer, sizeof(int) * N, ep);
+			b_send(&info, buffer, sizeof(int) * N, ep, n);
+			e_send(&info, buffer, sizeof(int) * N, ep, n);
 		}
 	}
 
