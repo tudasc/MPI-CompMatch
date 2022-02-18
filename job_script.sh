@@ -46,3 +46,5 @@ srun ./example
 srun ./example
 srun ./example
 
+echo "done"
+
