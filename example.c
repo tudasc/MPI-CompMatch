@@ -63,7 +63,7 @@ void wait_for_completion_blocking(void *request) {
 void b_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 		int operation_number) {
 
-	if (info->flag == operation_number * 2 + 1) {
+	if (__builtin_expect(info->flag == operation_number * 2 + 1,0)) {
 		// increment: signal that WE finish the operation on the remote
 		info->flag++;
 		// no possibility of data-race, the remote will wait for us to put the data
@@ -100,13 +100,13 @@ void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 
 	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
-	if (info->ucx_request_flag_transfer != NULL) {
+	if (__builtin_expect(info->ucx_request_flag_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_flag_transfer);
 		info->ucx_request_flag_transfer = NULL;
 	}
 
 	// same for data transfer
-	if (info->ucx_request_data_transfer != NULL) {
+	if (__builtin_expect(info->ucx_request_data_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_data_transfer);
 		info->ucx_request_data_transfer = NULL;
 	}
@@ -119,7 +119,7 @@ void e_send(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 void b_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 		int operation_number) {
 
-	if (info->flag == operation_number * 2 + 1) {
+	if (__builtin_expect(info->flag == operation_number * 2 + 1,0)) {
 
 		info->flag++; // recv is done at our side
 		// no possibility of data race, WE will advance the comm
@@ -167,20 +167,20 @@ void e_recv(struct matching_info *info, void *buf, size_t size, ucp_ep_h ep,
 		int operation_number) {
 	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
-	if (info->ucx_request_flag_transfer != NULL) {
+	if (__builtin_expect(info->ucx_request_flag_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_flag_transfer);
 		info->ucx_request_flag_transfer = NULL;
 	}
 
 	// same for data transfer
-	if (info->ucx_request_data_transfer != NULL) {
+	if (__builtin_expect(info->ucx_request_data_transfer != NULL,0)) {
 		wait_for_completion_blocking(info->ucx_request_data_transfer);
 		info->ucx_request_data_transfer = NULL;
 	}
 
 	spin_wait_geq(&info->flag, operation_number * 2 + 1);
 
-	if (info->flag < operation_number * 2 + 2) {
+	if (__builtin_expect(info->flag < operation_number * 2 + 2,0)) {
 		//printf("Flag %d, expected %d, op_num %d",info->flag, operation_number*2 +1)
 		assert(info->flag == operation_number * 2 + 1);
 		//CROSSTALK
