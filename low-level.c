@@ -18,434 +18,379 @@
  #include "ompi/mca/osc/ucx/osc_ucx_request.h"
  */
 
-// from openucx doku:
-void empty_function_in_low_level_c(void *request, ucs_status_t status) {
+MPI_Win global_comm_win;
+int dummy_int = 0;
+
+struct matching_info {
+	int dummy;
+};
+
+static inline void spin_wait_geq(int *flag, int condition) {
+	while (*flag < condition) {
+		//TODO sleep?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	}
+	return;
+}
+
+void empty_function(void *request, ucs_status_t status) {
 	// callback if flush is completed
 }
 
-ucs_status_t blocking_ep_flush(ucp_ep_h ep, ucp_worker_h worker) {
-	void *request;
-	request = ucp_ep_flush_nb(ep, 0, empty_function_in_low_level_c);
-	if (request == NULL) {
-		return UCS_OK;
-	} else if (UCS_PTR_IS_ERR(request)) {
-		return UCS_PTR_STATUS(request);
+void init() {
+	struct matching_info info;
+	struct matching_info info_to_send;
+
+}
+
+void wait_for_completion_blocking(void *request) {
+	assert(request!=NULL);
+	ucs_status_t status;
+	do {
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+		status = ucp_request_check_status(request);
+	} while (status == UCS_INPROGRESS);
+	ucp_request_free(request);
+}
+
+//operation_number*2= op has not started on remote
+//operation_number*2 +1= op has started on remote, 	we should initiate data transfer
+//operation_number*2 + 2= op has finished on remote
+
+void b_send(MPIOPT_Request* request) {
+
+	if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
+		// increment: signal that WE finish the operation on the remote
+		request->flag++;
+		// no possibility of data-race, the remote will wait for us to put the data
+		assert(request->flag == request->operation_number * 2 + 2);
+		// start rdma data transfer
+#ifdef STATISTIC_PRINTING
+		printf("send pushes data\n");
+#endif
+		ucs_status_t status = ucp_put_nbi(request->ep, request->buf, request->size, request->remote_data_addr,
+				request->remote_data_rkey);
+		//ensure order:
+		status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
+		status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
+				request->remote_flag_addr, request->remote_flag_rkey);
+		request->ucx_request_data_transfer = ucp_ep_flush_nb(request->ep, 0,
+				empty_function);
+
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+
 	} else {
-		ucs_status_t status;
-		do {
-			ucp_worker_progress(worker);
-			status = ucp_request_check_status(request);
-		} while (status == UCS_INPROGRESS);
-		ucp_request_free(request);
-		return status;
+		request->flag_buffer = request->operation_number * 2 + 1;
+		// give him the flag that we are ready: he will RDMA get the data
+		ucs_status_t status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
+				request->remote_flag_addr, request->remote_flag_rkey);
+
+		request->ucx_request_flag_transfer = ucp_ep_flush_nb(request->ep, 0,
+				empty_function);
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 	}
 }
 
+void e_send(MPIOPT_Request* request) {
 
-void RDMA_Get_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr){
-	ucs_status_t status = ucp_get_nbi(ep, (void*) buffer, size, remote_addr,
-				rkey);
+	//ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	// will call progres only if this is necessary
 
+	if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
+		wait_for_completion_blocking(request->ucx_request_flag_transfer);
+		request->ucx_request_flag_transfer = NULL;
+	}
+
+	// same for data transfer
+	if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
+		wait_for_completion_blocking(request->ucx_request_data_transfer);
+		request->ucx_request_data_transfer = NULL;
+	}
+
+	// we need to wait until the op has finished on the remote before re-using the data buffer
+	spin_wait_geq(&request->flag, request->operation_number * 2 + 2);
+
+}
+
+void b_recv(MPIOPT_Request* request) {
+	if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
+
+		request->flag++; // recv is done at our side
+		// no possibility of data race, WE will advance the comm
+		assert(request->flag == request->operation_number * 2 + 2);
+		// start rdma data transfer
+#ifdef STATISTIC_PRINTING
+		printf("recv fetches data\n");
+#endif
+		ucs_status_t status = ucp_get_nbi(request->ep, (void*) request->buf, request->size,
+				request->remote_data_addr, request->remote_data_rkey);
+		//TODO error checking in assertion?
 		if (status != UCS_OK && status != UCS_INPROGRESS) {
 			printf("ERROR in RDMA GET\n");
 		}
+		//ensure order:
+		status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
+		//TODO error checking in assertion?
 
-		// For Testing: use blocking flush:
-		blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
+		request->flag_buffer = request->operation_number * 2 + 2;
+		status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
+				request->remote_flag_addr, request->remote_flag_rkey);
+		//TODO error checking in assertion?
 
+		request->ucx_request_data_transfer = ucp_ep_flush_nb(request->ep, 0,
+				empty_function);
+
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+
+	} else {
+		//request->flag = READY_TO_RECEIVE;
+		request->flag_buffer = request->operation_number * 2 + 1;
+		// give him the flag that we are ready: he will RDMA put the data
+		ucs_status_t status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
+				request->remote_flag_addr, request->remote_flag_rkey);
+		//TODO error checking in assertion?
+
+		request->ucx_request_flag_transfer = ucp_ep_flush_nb(request->ep, 0,
+				empty_function);
+		//TODO do I call progress here?
+		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+	}
 
 }
 
-void RDMA_Put_test(void* buffer, size_t size,ucp_rkey_h rkey,ucp_ep_h ep,uint64_t remote_addr){
-	ucs_status_t status = ucp_put_nbi(ep, (void*) buffer, size, remote_addr,
-				rkey);
+void e_recv(MPIOPT_Request* request) {
+	//ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
-		if (status != UCS_OK && status != UCS_INPROGRESS) {
-			printf("ERROR in RDMA PUT\n");
+	if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
+		wait_for_completion_blocking(request->ucx_request_flag_transfer);
+		request->ucx_request_flag_transfer = NULL;
+	}
+
+	// same for data transfer
+	if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
+		wait_for_completion_blocking(request->ucx_request_data_transfer);
+		request->ucx_request_data_transfer = NULL;
+	}
+
+	spin_wait_geq(&request->flag, request->operation_number * 2 + 1);
+
+	if (__builtin_expect(request->flag < request->operation_number * 2 + 2, 0)) {
+		//printf("Flag %d, expected %d, op_num %d",request->flag, operation_number*2 +1)
+		assert(request->flag == request->operation_number * 2 + 1);
+		//CROSSTALK
+#ifdef STATISTIC_PRINTING
+		printf("crosstalk detected\n");
+#endif
+		// fetch the data
+		b_recv(request);
+		// and block until transfer finished
+		if (request->ucx_request_data_transfer != NULL) {
+			wait_for_completion_blocking(request->ucx_request_data_transfer);
+			request->ucx_request_data_transfer = NULL;
 		}
 
-		// For Testing: use blocking flush:
-		blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
-
+	}		// else: nothing to do, the op has finished
 
 }
 
+//TODO return proper error codes
+int MPIOPT_Start(MPIOPT_Request *request){
 
-void RDMA_Get(void *buffer, size_t size, int target,
-		MPI_Aint target_displacement, MPI_Win win) {
-	ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
-	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, target);
-	// we know displacement unit
-	//uint64_t remote_addr = (module->win_info_array[target]).addr
-	//		+ target_displacement;
-	// we will give the direct address
-	uint64_t remote_addr = target_displacement;
-	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
+	//TODO atomic
+	request->operation_number++;
 
-	ucs_status_t status = ucp_get_nbi(ep, (void*) buffer, size, remote_addr,
-			rkey);
-	if (status != UCS_OK && status != UCS_INPROGRESS) {
-		printf("ERROR in RDMA GET\n");
+	if (request->type == SEND_REQUEST_TYPE) {
+b_send(request);
+	} else if (request->type == RECV_REQUEST_TYPE) {
+		b_recv(request);
+	} else {
+		assert(false && "Error: uninitialized Request");
 	}
+}
 
-	// For Testing: use blocking flush:
-	blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
+int MPIOPT_Wait(MPIOPT_Request* request,MPI_Status *status) {
+
+	//TODO implement?
+	assert(status==MPI_STATUS_IGNORE);
+	if (request->type == SEND_REQUEST_TYPE) {
+		e_send(request);
+	} else if (request->type == RECV_REQUEST_TYPE) {
+		e_recv(request);
+	} else {
+		assert(false && "Error: uninitialized Request");
+	}
 
 }
 
-void RDMA_Put(void *buffer, size_t size, int target,
-		MPI_Aint target_displacement, MPI_Win win) {
-	ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t*) win->w_osc_module;
-	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, target);
-	// we know displacement unit
-	//uint64_t remote_addr = (module->win_info_array[target]).addr
-	//		+ target_displacement;
-	// we will give the direct address
-	uint64_t remote_addr = target_displacement;
-
-	ucp_rkey_h rkey = (module->win_info_array[target]).rkey;
-
-	ucs_status_t status = ucp_put_nbi(ep, (void*) buffer, size, remote_addr,
-			rkey);
-	if (status != UCS_OK && status != UCS_INPROGRESS) {
-		printf("ERROR in RDMA GET\n");
-	}
-
-	// For Testing: use blocking flush:
-	blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
-
+int MPIOPT_Test(MPIOPT_Request* request, int *flag, MPI_Status *status) {
+	assert(false);
+	//TODO implement
 }
 
-struct global_information* Init(int *send_list, int *recv_list) {
+int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
+		int dest, int tag, MPI_Comm comm, MPIOPT_Request *request) {
 
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	struct global_information *result = malloc(
-			sizeof(struct global_information));
+	//TODO support other dtypes as MPI_BYTE
+	assert(datatype==MPI_BYTE);
+	assert(tag < 32767);//32767 is the minimum value of MPI_TAG_UB required by mpi standard
 
-	MPI_Comm_size(MPI_COMM_WORLD, &result->num_ranks);
+	int rank, numtasks;
+	// Welchen rang habe ich?
+	MPI_Comm_rank(comm, &rank);
+	// wie viele Tasks gibt es?
+	MPI_Comm_size(comm, &numtasks);
 
-	int total_matching_queue_entries = 0;
-	int total_send_queue_entries = 0;
-	for (int i = 0; i < result->num_ranks; ++i) {
-		if (i != rank)
-			total_matching_queue_entries += recv_list[i];
-		printf("%d: Allocate Queue Size %d for msgs from rank %d\n", rank,
-				recv_list[i], i);
-		total_send_queue_entries += send_list[i];
-	}
+	int max_tag_allowed, bool_flag;
 
-	size_t total_queue_mem_needed = sizeof(struct matching_queue_entry)
-			* total_matching_queue_entries
-			+ sizeof(struct send_info) * total_send_queue_entries;
+	MPI_Attr_get(comm, MPI_TAG_UB, &max_tag_allowed, &bool_flag);
+	assert(bool_flag);
 
-	void *matching_queue_mem = calloc(total_queue_mem_needed, 1);
+	MPIOPT_Request info_to_send;
 
-	MPI_Win_create(matching_queue_mem, total_queue_mem_needed, 1,
-	MPI_INFO_NULL,
-	MPI_COMM_WORLD, &result->win);
+	ompi_osc_ucx_module_t *module =
+			(ompi_osc_ucx_module_t*) global_comm_win->w_osc_module;
+	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, dest);
 
-	//TODO reduce the amount of malloc calls
-	//int* count_size_mem=malloc(result->num_ranks * sizeof(int)*4);
 
-	result->local_matching_queue_count = malloc(
-			result->num_ranks * sizeof(int));
-	result->remote_matching_queue_count = malloc(
-			result->num_ranks * sizeof(int));
-	result->local_matching_queue_size = malloc(result->num_ranks * sizeof(int));
-	result->remote_matching_queue_size = malloc(
-			result->num_ranks * sizeof(int));
+	int tag_rkey_data = 32767 + 32767 + tag;
+	int tag_rkey_flag = tag_rkey_data;
+	assert(tag_rkey_flag < max_tag_allowed);
 
-	result->matching_queues = malloc(
-			result->num_ranks * sizeof(struct matching_queue_entry*));
-	result->remote_matching_queue_addresses = malloc(
-			result->num_ranks * sizeof(MPI_Aint));
-
-	struct matching_queue_entry *current_matching_mem_pos =
-			(struct matching_queue_entry*) matching_queue_mem;
-	for (int i = 0; i < result->num_ranks; ++i) {
-		if (i == rank) {
-			result->local_matching_queue_count[i] = 0;
-			result->remote_matching_queue_count[i] = 0;
-			result->local_matching_queue_size[i] = 0;
-			result->remote_matching_queue_size[i] = 0;
-			result->matching_queues[i] = current_matching_mem_pos;
-			// advance the ptr:
-			current_matching_mem_pos = (sizeof(struct send_info)
-					* total_send_queue_entries)
-					+ ((char*) current_matching_mem_pos);
-			result->remote_matching_queue_addresses[i] = 0;
-
-		} else {
-			int this_size = recv_list[i];
-
-			result->local_matching_queue_count[i] = 0;
-			result->remote_matching_queue_count[i] = 0;
-			result->local_matching_queue_size[i] = this_size;
-			result->remote_matching_queue_size[i] = send_list[i]; //TODO maybe communicate with other rank?
-			result->matching_queues[i] = current_matching_mem_pos;
-			// advance the ptr:
-			current_matching_mem_pos = &current_matching_mem_pos[this_size];
-
-			MPI_Aint local_adress;
-			MPI_Get_address(result->matching_queues[i], &local_adress);
-			//TODO should use sendrecv to avoid deadlock
-			MPI_Send(&local_adress, 1, MPI_AINT, i, INIT_MSG_TAG,
-			MPI_COMM_WORLD);
-			MPI_Recv(&result->remote_matching_queue_addresses[i], 1,
-			MPI_AINT, i, INIT_MSG_TAG, MPI_COMM_WORLD,
-			MPI_STATUSES_IGNORE);
-
-		}
-	}
-
-	// pointing directly behind alloced mem
-	assert(
-			current_matching_mem_pos
-					== matching_queue_mem + total_queue_mem_needed);
-
-	return result;
-
-}
-
-//TODO  refactor global to be a global var?
-
-//TODO pack the rkey and send it to remote alongside the local address
-
-// maps mem for rdma and initializes the send_info accordingly
-void map_mem_for_rdma(struct send_info *info, void *buf, size_t size) {
+	info_to_send.flag_buffer = 0;		// the TAG used to communicate the rkey?
+	info_to_send.flag = 0;
+	info_to_send.remote_data_addr = buf;
+	info_to_send.remote_flag_addr = request;
+	info_to_send.ucx_request_data_transfer = NULL;
+	info_to_send.ucx_request_flag_transfer = NULL;
+	info_to_send.operation_number=0;
+	info_to_send.type = 0;
+	info_to_send.buf=buf;
+	info_to_send.size=count;
+	info_to_send.mem_handle_data = 0;
+	info_to_send.mem_handle_flag = 0;
+	info_to_send.ep =0;
+	//TODO implement proper procedure if there isnt a matching Persistent call
+	MPI_Send(&info_to_send, sizeof(MPIOPT_Request), MPI_BYTE, dest,
+	COMM_BEGIN_TAG + tag, MPI_COMM_WORLD);
+	MPI_Recv(request, sizeof(MPIOPT_Request), MPI_BYTE, dest,
+			COMM_BEGIN_TAG + tag,
+			MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
 	ucp_context_h context = mca_osc_ucx_component.ucp_context;
+	request->ep=ep;
+	request->buf=buf;
+	request->size=count;
+
 	// prepare buffer for RDMA access:
 	ucp_mem_map_params_t mem_params;
 	//ucp_mem_attr_t mem_attrs;
-	ucs_status_t status;
+	ucs_status_t ucp_status;
 	// init mem params
 	memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
 
 	mem_params.address = buf;
-	mem_params.length = size;
+	mem_params.length = count;
 	// we need to tell ucx what fields are valid
 	mem_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS
 			| UCP_MEM_MAP_PARAM_FIELD_LENGTH;
 
-	status = ucp_mem_map(context, &mem_params, &info->mem_handle);
-	assert(status == UCS_OK && "Error in register mem for RDMA operation");
+	ucp_status = ucp_mem_map(context, &mem_params, &request->mem_handle_data);
+	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
 	void *rkey_buffer;
 	size_t rkey_size;
 
 	// pack a remote memory key
-	status = ucp_rkey_pack(context, info->mem_handle, &rkey_buffer, &rkey_size);
-	assert(status == UCS_OK && "Error in register mem for RDMA operation");
+	ucp_status = ucp_rkey_pack(context, request->mem_handle_data, &rkey_buffer,
+			&rkey_size);
+	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
-	printf("Packed Key, size:%lu\n", rkey_size);
-	assert(rkey_size<=RKEY_SPACE);
+	MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, dest, tag_rkey_data,
+	MPI_COMM_WORLD);
 
-	// cpy packed rkey in proper buffer for rdma transfer
-	memcpy(&info->remote_entry.rkey, rkey_buffer, rkey_size);
 	// free temp buf
 	ucp_rkey_buffer_release(rkey_buffer);
-}
 
-//TODO using different tags, and tgt ranks is not currently supported
+	memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
 
-_Static_assert(sizeof(struct send_info**) == sizeof(struct matching_queue_entry**),"Pointer sizes are different");
+	mem_params.address = request;
+	mem_params.length = sizeof(int);
+	// we need to tell ucx what fields are valid
+	mem_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS
+			| UCP_MEM_MAP_PARAM_FIELD_LENGTH;
 
-//TODO get_type_extend benutzen um andere types als byte zu erlauben
-void match_send(struct global_information *global_info, int send_ID, void *buf,
-		int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
-	assert(comm==MPI_COMM_WORLD);
-	assert(datatype==MPI_BYTE);
-	assert(
-			global_info->remote_matching_queue_size[dest]
-					> global_info->remote_matching_queue_count[dest]);
+	ucp_status = ucp_mem_map(context, &mem_params, &request->mem_handle_flag);
+	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	// pack a remote memory key
+	ucp_status = ucp_rkey_pack(context, request->mem_handle_flag, &rkey_buffer,
+			&rkey_size);
+	assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
-	struct send_info *info =
-			&(((struct send_info**) global_info->matching_queues)[rank][send_ID]);
+	MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, dest, tag_rkey_flag,
+	MPI_COMM_WORLD);
 
-	if (info->flag == 0) { // first time this operation is used
-		// need to "allocate" a new space in the remote receive queue
-		info->flag = CHECK_FOR_PREVIOUS_RKEY;
-		info->dest = dest;
+	// free temp buf
+	ucp_rkey_buffer_release(rkey_buffer);
 
-		MPI_Aint remote_queue_base =
-				global_info->remote_matching_queue_addresses[dest];
-		MPI_Aint remote_queue_pos = remote_queue_base
-				+ (sizeof(struct matching_queue_entry)
-						* global_info->remote_matching_queue_count[dest]);
+	void *temp_buf;
+	MPI_Status status;
+	int temp_buf_count;
+	MPI_Probe(dest, tag_rkey_data, MPI_COMM_WORLD, &status);
+	MPI_Get_count(&status, MPI_BYTE, &temp_buf_count);
+	temp_buf = calloc(temp_buf_count, 1);
+	MPI_Recv(temp_buf, temp_buf_count, MPI_BYTE, dest, tag_rkey_data, MPI_COMM_WORLD,
+	MPI_STATUS_IGNORE);
+	ucp_ep_rkey_unpack(ep, temp_buf, &request->remote_data_rkey);
+	free(temp_buf);
 
-		info->flag_addr = remote_queue_pos;
+	//TODO use MPROBE or other means of multi threading
+	MPI_Probe(dest, tag_rkey_flag, MPI_COMM_WORLD, &status);
+	MPI_Get_count(&status, MPI_BYTE, &temp_buf_count);
+	temp_buf = calloc(temp_buf_count, 1);
+	MPI_Recv(temp_buf, temp_buf_count, MPI_BYTE, dest, tag_rkey_flag, MPI_COMM_WORLD,
+	MPI_STATUS_IGNORE);
+	ucp_ep_rkey_unpack(ep, temp_buf, &request->remote_flag_rkey);
+	free(temp_buf);
 
-		info->remote_entry.tag = tag;
-		info->remote_entry.data_addr = buf;
-		//MPI_Get_address(buf, &info->remote_entry.data_addr);
-		MPI_Get_address(&info->flag, &info->remote_entry.flag_addr);
-		info->remote_entry.size = count;
+	//printf("Rank %d: buffer: %p remote:%p\n",rank,buffer,info.remote_data_addr);
+	//printf("Rank %d: flagbuffer: %p flagremote:%p\n",rank,&info,info.remote_flag_addr);
 
-		map_mem_for_rdma(info, buf, count);
+	// nice for attaching the debugger:
+	MPI_Barrier(MPI_COMM_WORLD);
 
-		info->remote_entry.flag = MATCHING_REQUEST_INITIALIZED;
-
-		global_info->remote_matching_queue_count[dest]++;
-
-	} else {
-
-		info->remote_entry.flag = MATCHING_REQUEST_INITIALIZED;
-
-		// double check, that the op has completed
-		//TODO should not be necessary
-		spin_wait_for(&info->flag, DATA_RECEIVED);
-
-		if (info->remote_entry.data_addr != buf) {
-			// need to update buffer
-			info->remote_entry.data_addr = buf;
-
-			ucp_context_h context = mca_osc_ucx_component.ucp_context;
-
-			ucp_mem_unmap(context, info->mem_handle);
-			map_mem_for_rdma(info, buf, count);
-		} else {
-			info->remote_entry.flag = info->remote_entry.flag
-					| PREVIOUS_RKEY_IS_VALID;
-		}
-
-		// just update tag, no special requirements
-		info->remote_entry.tag = tag;
-
-		if (dest != info->dest) {
-			//TODO update destination
-			assert(false);
-		}
-
-	}
-
-	//TODO we need less RDMa transfer if only the flag needs to be updated
-	RDMA_Put(&info->remote_entry, sizeof(struct matching_queue_entry), dest,
-			info->flag_addr, global_info->win);
-
-	return;
+	request->type = SEND_REQUEST_TYPE;
 
 }
+int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
+		int tag, MPI_Comm comm, MPIOPT_Request *request) {
+// it does the same as send_init (exchange RDMA parameters to setup comm)
 
-void begin_send(struct global_information *global_info, const int send_ID) {
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	struct send_info *info =
-			&(((struct send_info**) global_info->matching_queues)[rank][send_ID]);
-
-	info->remote_entry.flag = DATA_READY_TO_SEND;
-
-	if (info->flag == SEND_OP_FINISHED) {
-		info->remote_entry.flag = info->remote_entry.flag
-				| PREVIOUS_RKEY_IS_VALID;
-	}
-
-	RDMA_Put(&info->remote_entry.flag, sizeof(int), info->dest, info->flag_addr,
-			global_info->win);
-}
-
-void end_send(struct global_information *global_info, const int send_ID) {
-	//nothing to do
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	struct send_info *info =
-			&(((struct send_info**) global_info->matching_queues)[rank][send_ID]);
-
-	spin_wait_for(&info->flag, DATA_RECEIVED);
-	info->flag = SEND_OP_FINISHED;
+	MPIOPT_Send_init(buf, count, datatype, source, tag, comm, request);
+	request->type = RECV_REQUEST_TYPE;
 
 }
-
-struct recv_info* match_Receive(struct global_information *global_info,
-		void *buf, int count, MPI_Datatype datatype, int source, int tag,
-		MPI_Comm comm, MPI_Status *status) {
-	assert(comm==MPI_COMM_WORLD);
-	assert(datatype==MPI_BYTE);
-
-	struct recv_info *info = malloc(sizeof(struct recv_info));
-
-	// currently there will be only one op, so we will math this
-
-	info->dest = source;
-	info->matching_entry = &global_info->matching_queues[source][0]; //TODO IMPLEMENT ACTUAL MESSAGE MATCHING
-	info->data_buf = buf;
-
-	return info;
-}
-
-void start_Receive(struct global_information *global_info,
-		struct recv_info *info) {
-
-	ompi_osc_ucx_module_t *module =
-			(ompi_osc_ucx_module_t*) global_info->win->w_osc_module;
-	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, info->dest);
-
-	spin_wait_for_and(&info->matching_entry->flag, DATA_READY_TO_SEND);
-
-	if (!(info->matching_entry->flag & PREVIOUS_RKEY_IS_VALID)) {
-
-		//TODO free previous rkey if any
-		// unpack rkey
-		ucs_status_t status = ucp_ep_rkey_unpack(ep,
-				&info->matching_entry->rkey, &info->rkey);
-		assert(status == UCS_OK && "ERROR in unpacking the RKEY");
-	}
-
-	// RDMA GET
-	ucs_status_t status = ucp_get_nbi(ep, info->data_buf,
-			info->matching_entry->size, info->matching_entry->data_addr,
-			info->rkey);
-	if (status != UCS_OK && status != UCS_INPROGRESS) {
-		printf("ERROR in RDMA GET\n");
-	}
-
-	// For Testing: use blocking flush:
-	blocking_ep_flush(ep, mca_osc_ucx_component.ucp_worker);
-
-}
-
-void end_Receive(struct global_information *global_info, struct recv_info *info) {
-
-	info->matching_entry->flag = DATA_RECEIVED;
-	RDMA_Put(&info->matching_entry->flag, sizeof(int), info->dest,
-			info->matching_entry->flag_addr, global_info->win);
-
-}
-
-void finalize(struct global_information *global_info) {
-
-	//TODO this should be a param instead of a define
-#define MAX_NUM_OF_SENDS 1
-	//release all ressources
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
+int MPIOPT_Request_free(MPIOPT_Request *request) {
+	// release all ressources
 	ucp_context_h context = mca_osc_ucx_component.ucp_context;
 
-	for (int i = 0; i < MAX_NUM_OF_SENDS; ++i) {
-		struct send_info *info =
-				&(((struct send_info**) global_info->matching_queues)[rank][i]);
+	ucp_mem_unmap(context, request->mem_handle_flag);
+	ucp_mem_unmap(context, request->mem_handle_data);
+	request->type = 0;	// uninitialized
+}
 
-		// otherwise op was not used
-		if (info->remote_entry.flag != 0) {
-			ucp_mem_unmap(context, info->mem_handle);
-		}
-	}
+int MPIOPT_INIT() {
+	// create the global win used for rdma transfers
+	//TODO maybe we need less initializatzion to initioaize the RDMA component?
+	MPI_Win_create(&dummy_int, sizeof(int), 1, MPI_INFO_NULL, MPI_COMM_WORLD,
+			&global_comm_win);
 
-	MPI_Win_free(&global_info->win);
-	free(global_info->local_matching_queue_count);
-	free(global_info->local_matching_queue_size);
-	free(global_info->remote_matching_queue_count);
-	free(global_info->remote_matching_queue_size);
-
-	free(global_info->remote_matching_queue_addresses);
-	free(global_info->matching_queues[0]);
-	free(global_info->matching_queues);
-	free(global_info);
+}
+int MPIOPT_FINALIZE() {
+	MPI_Win_free(&global_comm_win);
 
 }
 
