@@ -360,7 +360,7 @@ int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
 	//printf("Rank %d: flagbuffer: %p flagremote:%p\n",rank,&info,info.remote_flag_addr);
 
 	// nice for attaching the debugger:
-	MPI_Barrier(MPI_COMM_WORLD);
+	//MPI_Barrier(MPI_COMM_WORLD);
 
 	request->type = SEND_REQUEST_TYPE;
 

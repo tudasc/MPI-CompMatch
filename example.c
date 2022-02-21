@@ -32,15 +32,15 @@
 
 // bufsize and num iter have to be large to get performance benefit, otherwise slowdown occur
 //KB
-//#define BUFFER_SIZE 1000
+#define BUFFER_SIZE 1000
 // MB
 //#define BUFFER_SIZE 1000000
 
 
-//#define NUM_ITERS 100000
+#define NUM_ITERS 100000
 
-#define BUFFER_SIZE 100
-#define NUM_ITERS 1000
+//#define BUFFER_SIZE 100
+//#define NUM_ITERS 1000
 
 #define N BUFFER_SIZE
 
