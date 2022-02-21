@@ -27,13 +27,17 @@
 
 #define RECV_REQUEST_TYPE 1
 #define SEND_REQUEST_TYPE 2
+#define SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION 3
+#define RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION 4
+#define SEND_REQUEST_TYPE_USE_FALLBACK 5
+#define Recv_REQUEST_TYPE_USE_FALLBACK 6
 
 struct mpiopt_request {
 	int flag;
 	int flag_buffer;
 	uint64_t remote_data_addr;
-	ucp_rkey_h remote_data_rkey;
 	uint64_t remote_flag_addr;
+	ucp_rkey_h remote_data_rkey;
 	ucp_rkey_h remote_flag_rkey;
 	void* buf;
 	size_t size;
@@ -45,6 +49,14 @@ struct mpiopt_request {
 	ucp_mem_h mem_handle_data;
 	ucp_mem_h mem_handle_flag;
 	ucp_ep_h ep;// save used endpoint, so we dont have to look it up over and over
+	// necessary for backup in case no other persistent op matches
+	MPI_Request backup_request;
+	int tag;
+	int dest;
+	MPI_Comm comm;
+	MPI_Request rdma_exchange_request;
+	MPI_Request rdma_exchange_request_send;
+	//struct mpiopt_request* rdma_exchange_buffer;
 };
 
 /*
@@ -90,7 +102,7 @@ int MPIOPT_INIT();
 int MPIOPT_FINALIZE();
 
 
-
+#define RDMA_SPIN_WAIT_THRESHOLD 32
 
 
 #endif /* LOW_LEVEL_H_ */
