@@ -138,8 +138,8 @@ void e_send(MPIOPT_Request *request) {
     acknowlege_Request_free(request);
     // check if we need to send the current msg via fallback:
     if (request->flag < request->operation_number * 2 + 2) {
-      MPIOPT_Start(request);
-      MPIOPT_Wait(request, MPI_STATUS_IGNORE);
+      MPIOPT_Start_internal(request);
+      MPIOPT_Wait_internal(request, MPI_STATUS_IGNORE);
     }
   }
 }
@@ -227,8 +227,8 @@ void e_recv(MPIOPT_Request *request) {
     if (request->flag < request->operation_number * 2 + 2) {
       // there is NO the possibility of crosstalk if the other process called
       // free
-      MPIOPT_Start(request);
-      MPIOPT_Wait(request, MPI_STATUS_IGNORE);
+      MPIOPT_Start_internal(request);
+      MPIOPT_Wait_internal(request, MPI_STATUS_IGNORE);
     }
   } else
 
@@ -361,7 +361,7 @@ void exchange_rdma_info(MPIOPT_Request *request) {
 }
 
 // TODO return proper error codes
-int MPIOPT_Start(MPIOPT_Request *request) {
+int MPIOPT_Start_internal(MPIOPT_Request *request) {
 
   // TODO atomic
   request->operation_number++;
@@ -402,7 +402,7 @@ int MPIOPT_Start(MPIOPT_Request *request) {
   }
 }
 
-int MPIOPT_Wait(MPIOPT_Request *request, MPI_Status *status) {
+int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
 
   // TODO implement MPI status?
   assert(status == MPI_STATUS_IGNORE);
@@ -457,12 +457,12 @@ int MPIOPT_Wait(MPIOPT_Request *request, MPI_Status *status) {
   }
 }
 
-int MPIOPT_Test(MPIOPT_Request *request, int *flag, MPI_Status *status) {
+int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag, MPI_Status *status) {
   assert(false);
   // TODO implement
 }
 
-int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
+int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
                      int dest, int tag, MPI_Comm comm,
                      MPIOPT_Request *request) {
 
@@ -518,7 +518,7 @@ int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
   }
 }
 
-int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
+int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype, int source,
                      int tag, MPI_Comm comm, MPIOPT_Request *request) {
   // it does the same as send_init (exchange RDMA parameters to setup comm)
 
@@ -535,16 +535,46 @@ int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
 
 // TODO this is blocking: we may want to do it non-blocking and free all
 // leftover ressources at the end?
-int MPIOPT_Request_free(MPIOPT_Request *request) {
+int MPIOPT_Request_free_internal (MPIOPT_Request *request) {
 
   acknowlege_Request_free(request);
   request->type = 0; // uninitialized
 }
 
-int MPIOPT_INIT() {
+void MPIOPT_INIT() {
   // create the global win used for rdma transfers
   // TODO maybe we need less initializatzion to initioaize the RDMA component?
   MPI_Win_create(&dummy_int, sizeof(int), 1, MPI_INFO_NULL, MPI_COMM_WORLD,
                  &global_comm_win);
 }
-int MPIOPT_FINALIZE() { MPI_Win_free(&global_comm_win); }
+void MPIOPT_FINALIZE() { MPI_Win_free(&global_comm_win); }
+
+int MPIOPT_Start(MPI_Request *request){
+	return MPIOPT_Start_internal(*request);
+}
+int MPIOPT_Wait(MPI_Request *request, MPI_Status *status){
+	return MPIOPT_Wait(*request, status);
+}
+int MPIOPT_Test(MPI_Request *request, int *flag, MPI_Status *status){
+	return MPIOPT_Test_internal(*request, flag, status);
+}
+int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
+                     int dest, int tag, MPI_Comm comm, MPI_Request *request){
+
+	*request= malloc(sizeof(MPIOPT_Request));
+
+	return MPIOPT_Send_init_internal(buf, count, datatype, dest, tag, comm, *request);
+}
+
+int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
+                     int tag, MPI_Comm comm, MPI_Request *request){
+	*request= malloc(sizeof(MPIOPT_Request));
+	return MPIOPT_Recv_init_internal(buf, count, datatype, source, tag, comm, *request);
+}
+
+int MPIOPT_Request_free(MPI_Request *request){
+	int retval=MPIOPT_Request_free_internal(*request);
+	free (request);
+	return retval;
+}
+
