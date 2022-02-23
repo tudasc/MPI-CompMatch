@@ -29,19 +29,19 @@ void empty_function(void *request, ucs_status_t status) {
   // callback if flush is completed
 }
 
-int MPIOPT_Start_internal(MPIOPT_Request *request);
-int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status);
-int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
-                         MPI_Status *status);
-int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
-                              int dest, int tag, MPI_Comm comm,
-                              MPIOPT_Request *request);
-int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
-                              int source, int tag, MPI_Comm comm,
-                              MPIOPT_Request *request);
-int MPIOPT_Request_free_internal(MPIOPT_Request *request);
+static int MPIOPT_Start_internal(MPIOPT_Request *request);
+static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status);
+static int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
+                                MPI_Status *status);
+static int MPIOPT_Send_init_internal(const void *buf, int count,
+                                     MPI_Datatype datatype, int dest, int tag,
+                                     MPI_Comm comm, MPIOPT_Request *request);
+static int MPIOPT_Recv_init_internal(void *buf, int count,
+                                     MPI_Datatype datatype, int source, int tag,
+                                     MPI_Comm comm, MPIOPT_Request *request);
+static int MPIOPT_Request_free_internal(MPIOPT_Request *request);
 
-void wait_for_completion_blocking(void *request) {
+static void wait_for_completion_blocking(void *request) {
   assert(request != NULL);
   ucs_status_t status;
   do {
@@ -53,7 +53,7 @@ void wait_for_completion_blocking(void *request) {
 
 //#define STATISTIC_PRINTING
 
-void acknowlege_Request_free(MPIOPT_Request *request) {
+static void acknowlege_Request_free(MPIOPT_Request *request) {
   // wait for any outstanding RDMA Operation (i.e. transfer of flag that comm
   // is finished)
   if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
@@ -91,7 +91,7 @@ void acknowlege_Request_free(MPIOPT_Request *request) {
 // operation_number*2 +1= op has started on remote, 	we should initiate data
 // transfer operation_number*2 + 2= op has finished on remote
 
-void b_send(MPIOPT_Request *request) {
+static void b_send(MPIOPT_Request *request) {
 
   if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
     // increment: signal that WE finish the operation on the remote
@@ -129,7 +129,7 @@ void b_send(MPIOPT_Request *request) {
   }
 }
 
-void e_send_with_comm_abort_test(MPIOPT_Request *request) {
+static void e_send_with_comm_abort_test(MPIOPT_Request *request) {
   int flag_comm_abort = 0;
 
   // busy wait
@@ -155,7 +155,7 @@ void e_send_with_comm_abort_test(MPIOPT_Request *request) {
   }
 }
 
-void e_send(MPIOPT_Request *request) {
+static void e_send(MPIOPT_Request *request) {
 
   // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
   // will call progres only if this is necessary
@@ -173,7 +173,6 @@ void e_send(MPIOPT_Request *request) {
 
   // we need to wait until the op has finished on the remote before re-using the
   // data buffer
-  int flag_comm_abort = 0;
   int count = 0;
   // busy wait
   while (__builtin_expect(request->flag < request->operation_number * 2 + 2 &&
@@ -184,12 +183,13 @@ void e_send(MPIOPT_Request *request) {
   }
 
   if (__builtin_expect(request->flag < request->operation_number * 2 + 2, 0)) {
-    // after some time: test if the other rank has freed the request in between
+    // after some time: also test if the other rank has freed the request in
+    // between
     e_send_with_comm_abort_test(request);
   }
 }
 
-void b_recv(MPIOPT_Request *request) {
+static void b_recv(MPIOPT_Request *request) {
   if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
 
     request->flag++; // recv is done at our side
@@ -202,18 +202,20 @@ void b_recv(MPIOPT_Request *request) {
     ucs_status_t status =
         ucp_get_nbi(request->ep, (void *)request->buf, request->size,
                     request->remote_data_addr, request->remote_data_rkey);
-    // TODO error checking in assertion?
+
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
+    /*
     if (status != UCS_OK && status != UCS_INPROGRESS) {
       printf("ERROR in RDMA GET\n");
-    }
+    }*/
     // ensure order:
     status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
-    // TODO error checking in assertion?
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
 
     request->flag_buffer = request->operation_number * 2 + 2;
     status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                          request->remote_flag_addr, request->remote_flag_rkey);
-    // TODO error checking in assertion?
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
 
     request->ucx_request_data_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
@@ -228,7 +230,7 @@ void b_recv(MPIOPT_Request *request) {
     ucs_status_t status =
         ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                     request->remote_flag_addr, request->remote_flag_rkey);
-    // TODO error checking in assertion?
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
 
     request->ucx_request_flag_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
@@ -237,7 +239,7 @@ void b_recv(MPIOPT_Request *request) {
   }
 }
 
-void e_recv_with_comm_abort_test(MPIOPT_Request *request) {
+static void e_recv_with_comm_abort_test(MPIOPT_Request *request) {
   int flag_comm_abort = 0;
 
   // busy wait
@@ -263,7 +265,7 @@ void e_recv_with_comm_abort_test(MPIOPT_Request *request) {
   }
 }
 
-void e_recv(MPIOPT_Request *request) {
+static void e_recv(MPIOPT_Request *request) {
   // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
   if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
@@ -304,7 +306,7 @@ void e_recv(MPIOPT_Request *request) {
 }
 
 // exchanges the RDMA info
-void exchange_rdma_info(MPIOPT_Request *request) {
+static void exchange_rdma_info(MPIOPT_Request *request) {
 #ifdef STATISTIC_PRINTING
   printf("RDMA  connection established\n");
 #endif
@@ -417,43 +419,52 @@ void exchange_rdma_info(MPIOPT_Request *request) {
 #endif
 }
 
-// TODO return proper error codes
-int MPIOPT_Start_internal(MPIOPT_Request *request) {
+static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
+  int flag;
+  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+  if (flag) {
+    // found matching counterpart
+    exchange_rdma_info(request);
+    request->type = SEND_REQUEST_TYPE;
+    b_send(request); // start RDMA
+  } else {
+    // use Fallback: post Isend
+    MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
+  }
+}
 
-  // TODO atomic
+static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
+  int flag;
+  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+  if (flag) {
+    // found matching counterpart
+    exchange_rdma_info(request);
+    request->type = RECV_REQUEST_TYPE;
+    b_recv(request); // start RDMA
+  } else {
+    // use Fallback: post Irecv
+    MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
+  }
+}
+
+// TODO return proper error codes
+static int MPIOPT_Start_internal(MPIOPT_Request *request) {
+
+  // TODO atomic increment for multi thhreading
   request->operation_number++;
+
+  // TODO switch ?
 
   if (request->type == SEND_REQUEST_TYPE) {
     b_send(request);
   } else if (request->type == RECV_REQUEST_TYPE) {
     b_recv(request);
   } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    int flag;
-    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-    if (flag) {
-      // found matching counterpart
-      exchange_rdma_info(request);
-      request->type = SEND_REQUEST_TYPE;
-      b_send(request); // start RDMA
-    } else {
-      // use Fallback: post Isend
-      MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
-                request->tag, request->comm, &request->backup_request);
-    }
-
+    start_send_when_searching_for_connection(request);
   } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    int flag;
-    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-    if (flag) {
-      // found matching counterpart
-      exchange_rdma_info(request);
-      request->type = RECV_REQUEST_TYPE;
-      b_recv(request); // start RDMA
-    } else {
-      // use Fallback: post Irecv
-      MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
-                request->tag, request->comm, &request->backup_request);
-    }
+    start_recv_when_searching_for_connection(request);
   } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
     MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
               request->tag, request->comm, &request->backup_request);
@@ -465,62 +476,64 @@ int MPIOPT_Start_internal(MPIOPT_Request *request) {
   }
 }
 
-int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
+static void wait_send_when_searching_for_connection(MPIOPT_Request *request) {
+  int flag;
+  MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+  while (!flag) {
+    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+    if (flag) {
+      // found matching counterpart
+      exchange_rdma_info(request);
+      request->type = SEND_REQUEST_TYPE;
+      MPI_Cancel(
+          &request->backup_request); // we have issued this operation before
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+      b_send(request);
+      e_send(request);
+    } else {
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+      // TODO sleep? and let MPI progress
+    }
+  }
+}
+// end while, either backup comm finished, or RDMA connection was}
+void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
+  int flag;
+  MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+  while (!flag) {
+    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+    if (flag) {
+      // found matching counterpart
+      exchange_rdma_info(request);
+      request->type = RECV_REQUEST_TYPE;
+      MPI_Cancel(
+          &request->backup_request); // we have issued this operation before
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+      b_recv(request);
+      e_recv(request);
+    } else {
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+      // TODO sleep? and let MPI progress
+    }
+  }
+  // end while, either backup comm finished, or RDMA connection was}
+}
+
+static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
 
   // TODO implement MPI status?
   assert(status == MPI_STATUS_IGNORE);
 
-  // TODO switch over the status
+  // TODO switch ?
 
   if (request->type == SEND_REQUEST_TYPE) {
     e_send(request);
   } else if (request->type == RECV_REQUEST_TYPE) {
     e_recv(request);
   } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    int flag;
-    MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-    while (!flag) {
-
-      MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-      if (flag) {
-        // found matching counterpart
-        exchange_rdma_info(request);
-        request->type = SEND_REQUEST_TYPE;
-        MPI_Cancel(
-            &request->backup_request); // we have issued this operation before
-        MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-        b_send(request);
-        e_send(request);
-
-      } else {
-        MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-        // TODO sleep? and let MPI progress
-      }
-    } // end while, either backup comm finished, or RDMA connection was
-      // established
-
+    wait_send_when_searching_for_connection(request);
   } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    int flag;
-    MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-    while (!flag) {
-
-      MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-      if (flag) {
-        // found matching counterpart
-        exchange_rdma_info(request);
-        request->type = RECV_REQUEST_TYPE;
-        MPI_Cancel(
-            &request->backup_request); // we have issued this operation before
-        MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-        b_recv(request);
-        e_recv(request);
-
-      } else {
-        MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-        // TODO sleep? and let MPI progress
-      }
-    } // end while, either backup comm finished, or RDMA connection was
-      // established
+    wait_recv_when_searching_for_connection(request);
   } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK ||
              request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
     MPI_Wait(&request->backup_request, status);
@@ -529,15 +542,15 @@ int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
   }
 }
 
-int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
-                         MPI_Status *status) {
+static int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
+                                MPI_Status *status) {
   assert(false);
   // TODO implement
 }
 
-int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
-                              int dest, int tag, MPI_Comm comm,
-                              MPIOPT_Request *request) {
+static int MPIOPT_Send_init_internal(const void *buf, int count,
+                                     MPI_Datatype datatype, int dest, int tag,
+                                     MPI_Comm comm, MPIOPT_Request *request) {
 
   // TODO support other dtypes as MPI_BYTE
   assert(datatype == MPI_BYTE);
@@ -592,9 +605,9 @@ int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
   }
 }
 
-int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
-                              int source, int tag, MPI_Comm comm,
-                              MPIOPT_Request *request) {
+static int MPIOPT_Recv_init_internal(void *buf, int count,
+                                     MPI_Datatype datatype, int source, int tag,
+                                     MPI_Comm comm, MPIOPT_Request *request) {
   // it does the same as send_init (exchange RDMA parameters to setup comm)
 
   MPIOPT_Send_init_internal(buf, count, datatype, source, tag, comm, request);
@@ -610,7 +623,7 @@ int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
 
 // TODO this is blocking: we may want to do it non-blocking and free all
 // leftover ressources at the end?
-int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
+static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
   if (request->type == RECV_REQUEST_TYPE ||
       request->type == SEND_REQUEST_TYPE) {
