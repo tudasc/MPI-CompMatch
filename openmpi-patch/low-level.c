@@ -52,16 +52,16 @@ void wait_for_completion_blocking(void *request) {
 }
 
 void acknowlege_Request_free(MPIOPT_Request *request) {
-
   request->flag_buffer = -1;
-  MPI_Send(&request->flag_buffer, sizeof(int), MPI_BYTE, request->dest,
+
+  MPI_Send(&request->operation_number, sizeof(int), MPI_BYTE, request->dest,
            COMM_BEGIN_TAG + request->tag, request->comm);
   // probe for the Msg that the communication will end
 
-  MPI_Recv(&request->flag, sizeof(int), MPI_BYTE, request->dest,
+  MPI_Recv(&request->flag_buffer, sizeof(int), MPI_BYTE, request->dest,
            COMM_BEGIN_TAG + request->tag, request->comm, MPI_STATUS_IGNORE);
   // we may need to wait until all other RDMA has finished
-  assert(request->flag == -1);
+  assert(request->flag_buffer == request->operation_number);
 
   // release all RDMA ressources
   ucp_context_h context = mca_osc_ucx_component.ucp_context;
@@ -140,18 +140,21 @@ void e_send(MPIOPT_Request *request) {
     ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
     if (count > RDMA_SPIN_WAIT_THRESHOLD) {
+      // after some Time: also check, if the otehr rank has freed the request in
+      // between
       MPI_Test(&request->rdma_exchange_request, &flag_comm_abort,
                MPI_STATUS_IGNORE);
     }
   }
 
   if (__builtin_expect(flag_comm_abort, 0)) {
-    request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
+    // other rank has freed the corresponding request
+    request->type = SEND_REQUEST_TYPE_USE_FALLBACK;
     acknowlege_Request_free(request);
     // check if we need to send the current msg via fallback:
     if (request->flag < request->operation_number * 2 + 2) {
-      MPIOPT_Start_internal(request);
-      MPIOPT_Wait_internal(request, MPI_STATUS_IGNORE);
+      MPI_Send(request->buf, request->size, MPI_BYTE, request->dest,
+               request->tag, request->comm);
     }
   }
 }
@@ -228,19 +231,18 @@ void e_recv(MPIOPT_Request *request) {
     ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
     if (count > RDMA_SPIN_WAIT_THRESHOLD) {
+      // after some time: also check if the other process has freed the request
       MPI_Test(&request->rdma_exchange_request, &flag_comm_abort,
                MPI_STATUS_IGNORE);
     }
   }
   if (__builtin_expect(flag_comm_abort, 0)) {
-    request->type = RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
+    request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
     acknowlege_Request_free(request);
     // we need to check if we have to post the fallback request
     if (request->flag < request->operation_number * 2 + 2) {
-      // there is NO the possibility of crosstalk if the other process called
-      // free
-      MPIOPT_Start_internal(request);
-      MPIOPT_Wait_internal(request, MPI_STATUS_IGNORE);
+      MPI_Recv(request->buf, request->size, MPI_BYTE, request->dest,
+               request->tag, request->comm, MPI_STATUS_IGNORE);
     }
   } else
 
@@ -389,7 +391,7 @@ int MPIOPT_Start_internal(MPIOPT_Request *request) {
       // found matching counterpart
       exchange_rdma_info(request);
       request->type = SEND_REQUEST_TYPE;
-      return MPIOPT_Start_internal(request);
+      b_send(request); // start RDMA
     } else {
       // use Fallback: post Isend
       MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
@@ -403,12 +405,18 @@ int MPIOPT_Start_internal(MPIOPT_Request *request) {
       // found matching counterpart
       exchange_rdma_info(request);
       request->type = RECV_REQUEST_TYPE;
-      return MPIOPT_Start_internal(request);
+      b_recv(request); // start RDMA
     } else {
       // use Fallback: post Irecv
       MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
                 request->tag, request->comm, &request->backup_request);
     }
+  } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
+    MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
+  } else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
+    MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
   } else {
     assert(false && "Error: uninitialized Request");
   }
@@ -464,6 +472,9 @@ int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
       }
     } // end while, either backup comm finished, or RDMA connection was
       // established
+  } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK ||
+             request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
+    MPI_Wait(&request->backup_request, status);
   } else {
     assert(false && "Error: uninitialized Request");
   }
@@ -551,13 +562,27 @@ int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
 // leftover ressources at the end?
 int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
-	// wait for any outstanding RDMA OPeration (i.e. transfer of flag that comm is finished)
-	  if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
-	    wait_for_completion_blocking(request->ucx_request_flag_transfer);
-	    request->ucx_request_flag_transfer = NULL;
-	  }
+  if (request->type == RECV_REQUEST_TYPE ||
+      request->type == SEND_REQUEST_TYPE) {
+    // otherwise all these ressources where never aquired
+    // wait for any outstanding RDMA OPeration (i.e. transfer of flag that comm
+    // is finished)
+    if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
+      wait_for_completion_blocking(request->ucx_request_flag_transfer);
+      request->ucx_request_flag_transfer = NULL;
+    }
 
-  acknowlege_Request_free(request);
+    acknowlege_Request_free(request);
+  }
+
+  // cancel any search for RDMa connection, if necessary
+  int flag;
+  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+  if (!flag) {
+
+    MPI_Cancel(&request->rdma_exchange_request);
+    MPI_Wait(&request->rdma_exchange_request, MPI_STATUS_IGNORE);
+  }
   request->type = 0; // uninitialized
 }
 

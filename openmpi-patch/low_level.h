@@ -34,7 +34,7 @@
 
 struct mpiopt_request {
   // this way it it can be used as a normal request ptr as well
-  struct ompi_request_t;
+  struct ompi_request_t original_request;
   int flag;
   int flag_buffer;
   uint64_t remote_data_addr;
