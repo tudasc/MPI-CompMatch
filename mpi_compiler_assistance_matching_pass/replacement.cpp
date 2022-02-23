@@ -28,9 +28,25 @@
 
 using namespace llvm;
 
-void add_init(llvm::Module &M);
+void add_init(llvm::Module &M) {
 
-void add_finalize(llvm::Module &M);
+  for (auto *u : mpi_func->mpi_init->users()) {
+    if (auto *call = dyn_cast<CallBase>(u)) {
+      // MPI_Init should not be in an invoke inst
+      IRBuilder<> builder(call->getNextNode());
+      builder.CreateCall(mpi_func->optimized.init);
+    }
+  }
+}
+
+void add_finalize(llvm::Module &M) {
+  for (auto *u : mpi_func->mpi_finalize->users()) {
+    if (auto *call = dyn_cast<CallBase>(u)) {
+      IRBuilder<> builder(call);
+      builder.CreateCall(mpi_func->optimized.finalize);
+    }
+  }
+}
 
 void replace_call(CallBase *call, Function *func) {
 

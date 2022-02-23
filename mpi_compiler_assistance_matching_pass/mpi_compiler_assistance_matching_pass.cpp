@@ -144,6 +144,9 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
 
       errs() << "Replace " << send_init_list.size() << " send Operations \nand "
              << recv_init_list.size() << " receive Operations\n";
+
+      add_init(M);
+      add_finalize(M);
       replace_communication_calls(send_init_list, recv_init_list);
     }
 
