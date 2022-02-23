@@ -551,6 +551,12 @@ int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
 // leftover ressources at the end?
 int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
+	// wait for any outstanding RDMA OPeration (i.e. transfer of flag that comm is finished)
+	  if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
+	    wait_for_completion_blocking(request->ucx_request_flag_transfer);
+	    request->ucx_request_flag_transfer = NULL;
+	  }
+
   acknowlege_Request_free(request);
   request->type = 0; // uninitialized
 }
