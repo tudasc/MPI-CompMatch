@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ml openmpi/test hwloc/2.5.0
+ml openmpi/test hwloc/2.5.0 clang/11.1.0
 
 export OMPI_MCA_opal_warn_on_missing_libcuda=0
 export OMPI_MCA_opal_common_ucx_opal_mem_hooks=1

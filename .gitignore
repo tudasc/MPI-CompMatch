@@ -1,5 +1,8 @@
 # objis
 *.o
+#
+build/*
+
 #executable
 example
 #IDE specific
