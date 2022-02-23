@@ -104,39 +104,29 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
 
     mpi_implementation_specifics = new ImplementationSpecifics(M);
 
-    std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>> send_conflicts =
-        check_mpi_send_conflicts(M);
+    // collect all Persistent Comm Operations
+    std::vector<llvm::CallBase *> send_init_list;
+    std::vector<llvm::CallBase *> recv_init_list;
 
-    std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>> recv_conflicts =
-        check_mpi_recv_conflicts(M);
-
-    if (!send_conflicts.empty() || !recv_conflicts.empty()) {
-      /*
-          if (!send_conflicts.empty()) {
-                  errs() << "send conflicts\n";
-                  for (auto conflict : send_conflicts) {
-                                                          conflict.first->dump();
-                                                          conflict.second->dump();
-                                                          errs()
-<< "\n";
-                                                  }
-          }
-          if (!recv_conflicts.empty()) {
-                  errs() << "recv conflicts\n";
-
-                  for (auto conflict : recv_conflicts) {
-                          conflict.first->dump();
-                          conflict.second->dump();
-                          errs() << "\n";
-                  }
-          }
-          */
-
-      errs() << "Message race conflicts detected\n";
-    } else {
-      errs() << "No conflicts detected, try to use mpi_assert_allow_overtaking "
-                "for better performance\n";
+    for (auto *u : mpi_func->mpi_send_init->users()) {
+      if (auto *call = dyn_cast<CallBase>(u)) {
+        if (call->getCalledFunction() == mpi_func->mpi_send_init) {
+          // not that I think anyone will pass a ptr to MPI func into another
+          // func, but better save than sorry
+          send_init_list.push_back(call);
+        }
+      }
     }
+
+    for (auto *u : mpi_func->mpi_recv_init->users()) {
+      if (auto *call = dyn_cast<CallBase>(u)) {
+        if (call->getCalledFunction() == mpi_func->mpi_recv_init) {
+          recv_init_list.push_back(call);
+        }
+      }
+    }
+
+    // check, if there are matching conflicts possible
 
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;

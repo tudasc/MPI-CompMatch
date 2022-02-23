@@ -62,13 +62,8 @@ FunctionMetadata::FunctionMetadata(const llvm::TargetLibraryInfo *TLI,
           if (auto *call = dyn_cast<CallBase>(&*I)) {
             if (is_mpi_call(call)) {
               has_mpi = true;
-              if (mpi_func->sync_functions.find(call->getCalledFunction()) !=
-                  mpi_func->sync_functions.end()) {
-                has_sync = true;
-              }
-              if (mpi_func->conflicting_functions.find(
-                      call->getCalledFunction()) !=
-                  mpi_func->conflicting_functions.end()) {
+              if (is_send_function(call->getCalledFunction()) ||
+                  is_recv_function(call->getCalledFunction())) {
                 may_conflict = true;
               }
             }

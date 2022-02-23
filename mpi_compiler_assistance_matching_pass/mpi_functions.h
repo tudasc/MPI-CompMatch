@@ -74,12 +74,8 @@ struct mpi_functions {
 
   struct mpiopt_functions optimized;
 
-  std::set<llvm::Function *>
-      conflicting_functions; // may result in a conflict for msg overtaking
-  std::set<llvm::Function *>
-      sync_functions; // will end the conflicting timeframe (like a barrier)
-  std::set<llvm::Function *>
-      unimportant_functions; // no implications for msg overtaking
+  std::vector<llvm::CallBase *> send_calls; // all calls that send MPI messages
+  std::vector<llvm::CallBase *> recv_calls; // all calls that recv mpi messages
 };
 
 struct mpi_functions *get_used_mpi_functions(llvm::Module &M);

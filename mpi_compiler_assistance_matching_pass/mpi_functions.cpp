@@ -31,6 +31,24 @@ bool is_mpi_function(llvm::Function *f) {
   ;
 }
 
+std::vector<CallBase *> gather_all_calls(Function *f) {
+  std::vector<CallBase *> result;
+  if (f) {
+    for (auto user : f->users()) {
+      if (CallBase *call = dyn_cast<CallBase>(user)) {
+        if (call->getCalledFunction() == f) {
+
+          result.push_back(call);
+        } else {
+          call->dump();
+          errs() << "\nWhy do you do that?\n";
+        }
+      }
+    }
+  }
+  return result;
+}
+
 struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
 
   struct mpi_functions *result = new struct mpi_functions;
@@ -46,84 +64,79 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
       // sync functions:
     } else if (f->getName().equals("MPI_Finalize")) {
       result->mpi_finalize = f;
-      result->sync_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Barrier")) {
       result->mpi_barrier = f;
-      result->sync_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Ibarrier")) {
       result->mpi_Ibarrier = f;
-      result->sync_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Allreduce")) {
       result->mpi_allreduce = f;
-      result->sync_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Iallreduce")) {
       result->mpi_Iallreduce = f;
-      result->sync_functions.insert(f);
+
     }
 
     // different sending modes:
     else if (f->getName().equals("MPI_Send")) {
       result->mpi_send = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Bsend")) {
       result->mpi_Bsend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Ssend")) {
       result->mpi_Ssend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Rsend")) {
       result->mpi_Rsend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Isend")) {
       result->mpi_Isend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Ibsend")) {
       result->mpi_Ibsend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Issend")) {
       result->mpi_Issend = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Irsend")) {
       result->mpi_Irsend = f;
-      result->conflicting_functions.insert(f);
 
     } else if (f->getName().equals("MPI_Sendrecv")) {
       result->mpi_Sendrecv = f;
-      result->conflicting_functions.insert(f);
 
     } else if (f->getName().equals("MPI_Recv")) {
       result->mpi_recv = f;
-      result->conflicting_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Irecv")) {
       result->mpi_Irecv = f;
-      result->conflicting_functions.insert(f);
 
       // Other MPI functions, that themselves may not yield another conflict
     } else if (f->getName().equals("MPI_Buffer_detach")) {
       result->mpi_buffer_detach = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Test")) {
       result->mpi_test = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Wait")) {
       result->mpi_wait = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Waitall")) {
       result->mpi_waitall = f;
-      result->unimportant_functions.insert(f);
 
     } else if (f->getName().equals("MPI_Start")) {
       result->mpi_start = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Recv_init")) {
       result->mpi_recv_init = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Send_init")) {
       result->mpi_send_init = f;
-      result->unimportant_functions.insert(f);
+
     } else if (f->getName().equals("MPI_Request_free")) {
       result->mpi_request_free = f;
-      result->unimportant_functions.insert(f);
     }
   }
 
@@ -178,6 +191,51 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
                            ->stripPointerCasts());
   }
 
+  // gather all MPI send and recv calls
+  /*
+   // currenty unused:
+          auto temp = gather_all_calls(result->mpi_send);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Bsend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Ssend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Rsend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Isend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Ibsend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Irsend);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Sendrecv);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_send_init);
+          result->send_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+
+           temp = gather_all_calls(result->mpi_recv);
+          result->recv_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Irecv);
+          result->recv_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_recv_init);
+          result->recv_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+           temp = gather_all_calls(result->mpi_Sendrecv);
+          result->recv_calls.insert(result->send_calls.end(), temp.begin(),
+                          temp.end());
+                          */
+
   return result;
 }
 
@@ -196,11 +254,11 @@ bool is_send_function(llvm::Function *f) {
          f == mpi_func->mpi_Ssend || f == mpi_func->mpi_Rsend ||
          f == mpi_func->mpi_Isend || f == mpi_func->mpi_Ibsend ||
          f == mpi_func->mpi_Irsend || f == mpi_func->mpi_Issend ||
-         f == mpi_func->mpi_Sendrecv;
+         f == mpi_func->mpi_Sendrecv || f == mpi_func->mpi_send_init;
 }
 
 bool is_recv_function(llvm::Function *f) {
   assert(f != nullptr);
   return f == mpi_func->mpi_recv || f == mpi_func->mpi_Irecv ||
-         f == mpi_func->mpi_Sendrecv;
+         f == mpi_func->mpi_Sendrecv || f == mpi_func->mpi_recv_init;
 }

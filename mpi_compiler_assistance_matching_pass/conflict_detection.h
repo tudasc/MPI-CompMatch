@@ -21,11 +21,9 @@
 
 #include <vector>
 
-std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>>
-check_mpi_recv_conflicts(llvm::Module &M);
+bool check_mpi_recv_conflicts(llvm::CallBase *send_init_call);
 
-std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>>
-check_mpi_send_conflicts(llvm::Module &M);
+bool check_mpi_send_conflicts(llvm::CallBase *recv_init_call);
 
 llvm::Value *get_communicator(llvm::CallBase *mpi_call);
 llvm::Value *get_src(llvm::CallBase *mpi_call, bool is_send);
