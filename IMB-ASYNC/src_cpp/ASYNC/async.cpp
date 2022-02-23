@@ -53,6 +53,7 @@ goods and services.
 #include <unistd.h>
 #include <climits>
 #include <math.h>
+#include <stdio.h>
 
 #if 1
 namespace sys {
@@ -433,6 +434,8 @@ namespace async_suite {
     void AsyncBenchmark_persistentpt2pt::init() {
             AsyncBenchmark::init();
             calc.init();
+            std::cout << "my code runs\n";
+
         }
 
         bool AsyncBenchmark_persistentpt2pt::benchmark(int count, MPI_Datatype datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) {
@@ -988,7 +991,7 @@ MPI_Start(&request_r);
 
     DECLARE_INHERITED(AsyncBenchmark_pt2pt, sync_pt2pt)
     DECLARE_INHERITED(AsyncBenchmark_ipt2pt, async_pt2pt)
-	DECLARE_INHERITED(AsyncBenchmark_persistentpt2pt, async_ipt2pt)
+	DECLARE_INHERITED(AsyncBenchmark_persistentpt2pt, async_persistentpt2pt)
     DECLARE_INHERITED(AsyncBenchmark_allreduce, sync_allreduce)
     DECLARE_INHERITED(AsyncBenchmark_iallreduce, async_allreduce)
     DECLARE_INHERITED(AsyncBenchmark_na2a, sync_na2a)
