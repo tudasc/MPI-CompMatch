@@ -9,8 +9,6 @@ add_library(mpi_compiler_assistance_matching_pass MODULE
     implementation_specific.cpp
     function_coverage.h
     function_coverage.cpp
-    additional_assertions.h
-    additional_assertions.cpp
     debug.h
     analysis_results.h
     analysis_results.cpp

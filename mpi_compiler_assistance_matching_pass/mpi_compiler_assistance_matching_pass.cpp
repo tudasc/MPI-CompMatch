@@ -43,7 +43,6 @@
 #include <utility>
 #include <vector>
 
-#include "additional_assertions.h"
 #include "analysis_results.h"
 #include "conflict_detection.h"
 #include "debug.h"
@@ -139,20 +138,6 @@ struct MSGOrderRelaxCheckerPass : public ModulePass {
                 "for better performance\n";
     }
 
-    if (check_no_any_tag(M)) {
-      errs() << "You can also safely specify mpi_assert_no_any_tag for better "
-                "performance\n";
-    }
-
-    if (check_no_any_source(M)) {
-      errs() << "You can also safely specify mpi_assert_no_any_source for "
-                "better performance\n";
-    }
-
-    if (check_exact_length(M)) {
-      errs() << "You can also safely specify mpi_assert_exact_length for "
-                "better performance\n";
-    }
 
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;
