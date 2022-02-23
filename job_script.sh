@@ -35,16 +35,16 @@ export OMPI_MCA_pml=ucx
 export UCX_WARN_UNUSED_ENV_VARS=n
 export UCX_UNIFIED_MODE=y
 
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
-srun ./example
+srun ./a.out
+srun ./a.out
+srun ./a.out
+#srun ./example
+#srun ./example
+#srun ./example
+#srun ./example
+#srun ./example
+#srun ./example
+#srun ./example
 
 echo "done"
 
