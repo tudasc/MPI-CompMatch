@@ -33,6 +33,9 @@
 #define Recv_REQUEST_TYPE_USE_FALLBACK 6
 
 struct mpiopt_request {
+  struct ompi_request_t original_request;
+  // therefore a PTR to this struct can also be used as a ptr to a normal MPI
+  // request
   int flag;
   int flag_buffer;
   uint64_t remote_data_addr;
@@ -90,17 +93,17 @@ static inline void spin_wait_until_not(int *flag, int condition) {
 
 typedef struct mpiopt_request MPIOPT_Request;
 
-int MPIOPT_Start(MPIOPT_Request *request);
-int MPIOPT_Wait(MPIOPT_Request *request, MPI_Status *status);
-int MPIOPT_Test(MPIOPT_Request *request, int *flag, MPI_Status *status);
+int MPIOPT_Start(MPI_Request *request);
+int MPIOPT_Wait(MPI_Request *request, MPI_Status *status);
+int MPIOPT_Test(MPI_Request *request, int *flag, MPI_Status *status);
 int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
-                     int dest, int tag, MPI_Comm comm, MPIOPT_Request *request);
+                     int dest, int tag, MPI_Comm comm, MPI_Request *request);
 int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
-                     int tag, MPI_Comm comm, MPIOPT_Request *request);
-int MPIOPT_Request_free(MPIOPT_Request *request);
+                     int tag, MPI_Comm comm, MPI_Request *request);
+int MPIOPT_Request_free(MPI_Request *request);
 
-int MPIOPT_INIT();
-int MPIOPT_FINALIZE();
+void MPIOPT_INIT();
+void MPIOPT_FINALIZE();
 
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
