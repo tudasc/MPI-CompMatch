@@ -29,6 +29,18 @@ void empty_function(void *request, ucs_status_t status) {
   // callback if flush is completed
 }
 
+int MPIOPT_Start_internal(MPIOPT_Request *request);
+int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status);
+int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
+                         MPI_Status *status);
+int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
+                              int dest, int tag, MPI_Comm comm,
+                              MPIOPT_Request *request);
+int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
+                              int source, int tag, MPI_Comm comm,
+                              MPIOPT_Request *request);
+int MPIOPT_Request_free_internal(MPIOPT_Request *request);
+
 void wait_for_completion_blocking(void *request) {
   assert(request != NULL);
   ucs_status_t status;
@@ -255,7 +267,7 @@ void e_recv(MPIOPT_Request *request) {
 // exchanges the RDMA info
 void exchange_rdma_info(MPIOPT_Request *request) {
 
-  uint64_t buffer_ptr = request;
+  uint64_t buffer_ptr = &request->flag;
   MPIOPT_Request info_to_send;
 
   ompi_osc_ucx_module_t *module =
@@ -377,7 +389,7 @@ int MPIOPT_Start_internal(MPIOPT_Request *request) {
       // found matching counterpart
       exchange_rdma_info(request);
       request->type = SEND_REQUEST_TYPE;
-      return MPIOPT_Start(request);
+      return MPIOPT_Start_internal(request);
     } else {
       // use Fallback: post Isend
       MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
@@ -391,7 +403,7 @@ int MPIOPT_Start_internal(MPIOPT_Request *request) {
       // found matching counterpart
       exchange_rdma_info(request);
       request->type = RECV_REQUEST_TYPE;
-      return MPIOPT_Start(request);
+      return MPIOPT_Start_internal(request);
     } else {
       // use Fallback: post Irecv
       MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
@@ -423,8 +435,8 @@ int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
         // found matching counterpart
         exchange_rdma_info(request);
         request->type = SEND_REQUEST_TYPE;
-        MPIOPT_Start(request);
-        return MPIOPT_Wait(request, status);
+        MPIOPT_Start_internal(request);
+        return MPIOPT_Wait_internal(request, status);
 
       } else {
         MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
@@ -443,8 +455,8 @@ int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
         // found matching counterpart
         exchange_rdma_info(request);
         request->type = RECV_REQUEST_TYPE;
-        MPIOPT_Start(request);
-        return MPIOPT_Wait(request, status);
+        MPIOPT_Start_internal(request);
+        return MPIOPT_Wait_internal(request, status);
 
       } else {
         MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
@@ -457,14 +469,15 @@ int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
   }
 }
 
-int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag, MPI_Status *status) {
+int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
+                         MPI_Status *status) {
   assert(false);
   // TODO implement
 }
 
 int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
-                     int dest, int tag, MPI_Comm comm,
-                     MPIOPT_Request *request) {
+                              int dest, int tag, MPI_Comm comm,
+                              MPIOPT_Request *request) {
 
   // TODO support other dtypes as MPI_BYTE
   assert(datatype == MPI_BYTE);
@@ -518,11 +531,12 @@ int MPIOPT_Send_init_internal(const void *buf, int count, MPI_Datatype datatype,
   }
 }
 
-int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype, int source,
-                     int tag, MPI_Comm comm, MPIOPT_Request *request) {
+int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype,
+                              int source, int tag, MPI_Comm comm,
+                              MPIOPT_Request *request) {
   // it does the same as send_init (exchange RDMA parameters to setup comm)
 
-  MPIOPT_Send_init(buf, count, datatype, source, tag, comm, request);
+  MPIOPT_Send_init_internal(buf, count, datatype, source, tag, comm, request);
 
   if (request->type == SEND_REQUEST_TYPE) {
     request->type = RECV_REQUEST_TYPE;
@@ -535,7 +549,7 @@ int MPIOPT_Recv_init_internal(void *buf, int count, MPI_Datatype datatype, int s
 
 // TODO this is blocking: we may want to do it non-blocking and free all
 // leftover ressources at the end?
-int MPIOPT_Request_free_internal (MPIOPT_Request *request) {
+int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
   acknowlege_Request_free(request);
   request->type = 0; // uninitialized
@@ -549,32 +563,33 @@ void MPIOPT_INIT() {
 }
 void MPIOPT_FINALIZE() { MPI_Win_free(&global_comm_win); }
 
-int MPIOPT_Start(MPI_Request *request){
-	return MPIOPT_Start_internal(*request);
+int MPIOPT_Start(MPI_Request *request) {
+  return MPIOPT_Start_internal((MPIOPT_Request *)*request);
 }
-int MPIOPT_Wait(MPI_Request *request, MPI_Status *status){
-	return MPIOPT_Wait(*request, status);
+int MPIOPT_Wait(MPI_Request *request, MPI_Status *status) {
+  return MPIOPT_Wait_internal((MPIOPT_Request *)*request, status);
 }
-int MPIOPT_Test(MPI_Request *request, int *flag, MPI_Status *status){
-	return MPIOPT_Test_internal(*request, flag, status);
+int MPIOPT_Test(MPI_Request *request, int *flag, MPI_Status *status) {
+  return MPIOPT_Test_internal((MPIOPT_Request *)*request, flag, status);
 }
 int MPIOPT_Send_init(const void *buf, int count, MPI_Datatype datatype,
-                     int dest, int tag, MPI_Comm comm, MPI_Request *request){
+                     int dest, int tag, MPI_Comm comm, MPI_Request *request) {
 
-	*request= malloc(sizeof(MPIOPT_Request));
+  *request = malloc(sizeof(MPIOPT_Request));
 
-	return MPIOPT_Send_init_internal(buf, count, datatype, dest, tag, comm, *request);
+  return MPIOPT_Send_init_internal(buf, count, datatype, dest, tag, comm,
+                                   (MPIOPT_Request *)*request);
 }
 
 int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
-                     int tag, MPI_Comm comm, MPI_Request *request){
-	*request= malloc(sizeof(MPIOPT_Request));
-	return MPIOPT_Recv_init_internal(buf, count, datatype, source, tag, comm, *request);
+                     int tag, MPI_Comm comm, MPI_Request *request) {
+  *request = malloc(sizeof(MPIOPT_Request));
+  return MPIOPT_Recv_init_internal(buf, count, datatype, source, tag, comm,
+                                   (MPIOPT_Request *)*request);
 }
 
-int MPIOPT_Request_free(MPI_Request *request){
-	int retval=MPIOPT_Request_free_internal(*request);
-	free (request);
-	return retval;
+int MPIOPT_Request_free(MPI_Request *request) {
+  int retval = MPIOPT_Request_free_internal((MPIOPT_Request *)*request);
+  free(*request);
+  return retval;
 }
-

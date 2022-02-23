@@ -33,8 +33,8 @@
 #define Recv_REQUEST_TYPE_USE_FALLBACK 6
 
 struct mpiopt_request {
-	// this way it it can be used as a normal request ptr as well
-	struct ompi_request_t;
+  // this way it it can be used as a normal request ptr as well
+  struct ompi_request_t;
   int flag;
   int flag_buffer;
   uint64_t remote_data_addr;
