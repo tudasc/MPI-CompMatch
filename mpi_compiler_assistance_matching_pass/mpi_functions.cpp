@@ -1,17 +1,17 @@
 /*
-  Copyright 2020 Tim Jammer
+ Copyright 2020 Tim Jammer
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
 
-       http://www.apache.org/licenses/LICENSE-2.0
+ http://www.apache.org/licenses/LICENSE-2.0
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
  */
 
 #include "mpi_functions.h"
@@ -111,7 +111,71 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
     } else if (f->getName().equals("MPI_Waitall")) {
       result->mpi_waitall = f;
       result->unimportant_functions.insert(f);
+
+    } else if (f->getName().equals("MPI_Start")) {
+      result->mpi_start = f;
+      result->unimportant_functions.insert(f);
+    } else if (f->getName().equals("MPI_Recv_init")) {
+      result->mpi_recv_init = f;
+      result->unimportant_functions.insert(f);
+    } else if (f->getName().equals("MPI_Send_init")) {
+      result->mpi_send_init = f;
+      result->unimportant_functions.insert(f);
+    } else if (f->getName().equals("MPI_Request_free")) {
+      result->mpi_request_free = f;
+      result->unimportant_functions.insert(f);
     }
+  }
+
+  // construct the optimized version of functions, if original functions where
+  // used:
+
+  if (result->mpi_wait) {
+    result->optimized.mpi_wait = cast<Function>(
+        M.getOrInsertFunction("MPIOPT_Wait", result->mpi_wait->getType())
+            .getCallee()
+            ->stripPointerCasts());
+  }
+  if (result->mpi_start) {
+    result->optimized.mpi_start = cast<Function>(
+        M.getOrInsertFunction("MPIOPT_Start", result->mpi_start->getType())
+            .getCallee()
+            ->stripPointerCasts());
+  }
+  if (result->mpi_send_init) {
+    result->optimized.mpi_send_init =
+        cast<Function>(M.getOrInsertFunction("MPIOPT_Send_init",
+                                             result->mpi_send_init->getType())
+                           .getCallee()
+                           ->stripPointerCasts());
+  }
+  if (result->mpi_recv_init) {
+    result->optimized.mpi_recv_init =
+        cast<Function>(M.getOrInsertFunction("MPIOPT_Recv_init",
+                                             result->mpi_recv_init->getType())
+                           .getCallee()
+                           ->stripPointerCasts());
+  }
+  if (result->mpi_request_free) {
+    result->optimized.mpi_request_free = cast<Function>(
+        M.getOrInsertFunction("MPIOPT_Request_free",
+                              result->mpi_request_free->getType())
+            .getCallee()
+            ->stripPointerCasts());
+  }
+
+  // construct the init and finish functions, if necessary:
+  if (result->mpi_send_init && result->mpi_recv_init) {
+    // void funcs that do not have params
+    auto *ftype = FunctionType::get(Type::getVoidTy(M.getContext()), false);
+    result->optimized.init =
+        cast<Function>(M.getOrInsertFunction("MPIOPT_INIT", ftype, {})
+                           .getCallee()
+                           ->stripPointerCasts());
+    result->optimized.finalize =
+        cast<Function>(M.getOrInsertFunction("MPIOPT_FINALIZE", ftype, {})
+                           .getCallee()
+                           ->stripPointerCasts());
   }
 
   return result;

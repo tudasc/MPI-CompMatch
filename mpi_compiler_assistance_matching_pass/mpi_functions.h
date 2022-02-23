@@ -28,6 +28,17 @@
 // main)
 extern struct mpi_functions *mpi_func;
 
+// optimized version of persistent ops
+struct mpiopt_functions {
+  llvm::Function *mpi_wait = nullptr;
+  llvm::Function *mpi_start = nullptr;
+  llvm::Function *mpi_send_init = nullptr;
+  llvm::Function *mpi_recv_init = nullptr;
+  llvm::Function *mpi_request_free = nullptr;
+  llvm::Function *init = nullptr;
+  llvm::Function *finalize = nullptr;
+};
+
 struct mpi_functions {
   llvm::Function *mpi_init = nullptr;
   llvm::Function *mpi_finalize = nullptr;
@@ -55,6 +66,13 @@ struct mpi_functions {
   llvm::Function *mpi_allreduce = nullptr;
   llvm::Function *mpi_Ibarrier = nullptr;
   llvm::Function *mpi_Iallreduce = nullptr;
+
+  llvm::Function *mpi_start = nullptr;
+  llvm::Function *mpi_send_init = nullptr;
+  llvm::Function *mpi_recv_init = nullptr;
+  llvm::Function *mpi_request_free = nullptr;
+
+  struct mpiopt_functions optimized;
 
   std::set<llvm::Function *>
       conflicting_functions; // may result in a conflict for msg overtaking
