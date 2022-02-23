@@ -62,10 +62,10 @@ struct ImplementationSpecifics *mpi_implementation_specifics;
 FunctionMetadata *function_metadata;
 
 namespace {
-struct MSGOrderRelaxCheckerPass : public ModulePass {
+struct MPICompilerAssistanceMatchingPass : public ModulePass {
   static char ID;
 
-  MSGOrderRelaxCheckerPass() : ModulePass(ID) {}
+  MPICompilerAssistanceMatchingPass() : ModulePass(ID) {}
 
   // register that we require this analysis
 
@@ -138,7 +138,6 @@ struct MSGOrderRelaxCheckerPass : public ModulePass {
                 "for better performance\n";
     }
 
-
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;
     delete mpi_implementation_specifics;
@@ -151,13 +150,13 @@ struct MSGOrderRelaxCheckerPass : public ModulePass {
 }; // class MSGOrderRelaxCheckerPass
 } // namespace
 
-char MSGOrderRelaxCheckerPass::ID = 42;
+char MPICompilerAssistanceMatchingPass::ID = 42;
 
 // Automatically enable the pass.
 // http://adriansampson.net/blog/clangpass.html
 static void registerExperimentPass(const PassManagerBuilder &,
                                    legacy::PassManagerBase &PM) {
-  PM.add(new MSGOrderRelaxCheckerPass());
+  PM.add(new MPICompilerAssistanceMatchingPass());
 }
 
 // static RegisterStandardPasses
