@@ -52,15 +52,27 @@ void wait_for_completion_blocking(void *request) {
 }
 
 void acknowlege_Request_free(MPIOPT_Request *request) {
+  // wait for any outstanding RDMA Operation (i.e. transfer of flag that comm
+  // is finished)
+  if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
+    wait_for_completion_blocking(request->ucx_request_flag_transfer);
+    request->ucx_request_flag_transfer = NULL;
+  }
+  if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
+    wait_for_completion_blocking(request->ucx_request_flag_transfer);
+    request->ucx_request_flag_transfer = NULL;
+  }
+
   request->flag_buffer = -1;
 
   MPI_Send(&request->operation_number, sizeof(int), MPI_BYTE, request->dest,
            COMM_BEGIN_TAG + request->tag, request->comm);
-  // probe for the Msg that the communication will end
 
+  // receive the Msg that the communication will end
   MPI_Recv(&request->flag_buffer, sizeof(int), MPI_BYTE, request->dest,
            COMM_BEGIN_TAG + request->tag, request->comm, MPI_STATUS_IGNORE);
-  // we may need to wait until all other RDMA has finished
+
+  // we need to be in the same msg as the other rank
   assert(request->flag_buffer == request->operation_number);
 
   // release all RDMA ressources
@@ -565,17 +577,11 @@ int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   if (request->type == RECV_REQUEST_TYPE ||
       request->type == SEND_REQUEST_TYPE) {
     // otherwise all these ressources where never aquired
-    // wait for any outstanding RDMA OPeration (i.e. transfer of flag that comm
-    // is finished)
-    if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
-      wait_for_completion_blocking(request->ucx_request_flag_transfer);
-      request->ucx_request_flag_transfer = NULL;
-    }
 
     acknowlege_Request_free(request);
   }
 
-  // cancel any search for RDMa connection, if necessary
+  // cancel any search for RDMA connection, if necessary
   int flag;
   MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
   if (!flag) {
