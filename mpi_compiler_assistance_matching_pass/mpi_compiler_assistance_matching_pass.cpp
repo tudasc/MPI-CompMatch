@@ -126,7 +126,21 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
       }
     }
 
-    // check, if there are matching conflicts possible
+    // remove any calls, where conflicts are possible
+    send_init_list.erase(std::remove_if(send_init_list.begin(),
+                                        send_init_list.end(),
+                                        check_mpi_send_conflicts),
+                         send_init_list.end());
+
+    recv_init_list.erase(std::remove_if(recv_init_list.begin(),
+                                        recv_init_list.end(),
+                                        check_mpi_recv_conflicts),
+                         recv_init_list.end());
+
+    errs() << "No conflicts found For sending Ops:\n";
+    for (auto s : send_init_list) {
+      s->dump();
+    }
 
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;
@@ -137,7 +151,8 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
 
     return false;
   }
-}; // class MSGOrderRelaxCheckerPass
+};
+// class MSGOrderRelaxCheckerPass
 } // namespace
 
 char MPICompilerAssistanceMatchingPass::ID = 42;
