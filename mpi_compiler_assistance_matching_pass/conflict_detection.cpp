@@ -27,8 +27,11 @@
 
 using namespace llvm;
 
+// TODO remove unused code
+
 // do i need to export it into header?
 std::vector<CallBase *> get_corresponding_wait(CallBase *call);
+std::vector<CallBase *> get_corresponding_free(CallBase *call);
 std::vector<CallBase *> get_scope_endings(CallBase *call);
 std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>>
 check_conflicts(llvm::Module &M, llvm::Function *f, bool is_send);
@@ -114,7 +117,7 @@ bool check_call_for_conflict(CallBase *mpi_call,
           Debug(errs() << "call to " << call->getCalledFunction()->getName()
                        << "No Communication after this, WARNING: finalize "
                           "without request Free is erronenous!\n";);
-          return true;
+          return false;
 
         } else if (std::find(scope_endings.begin(), scope_endings.end(),
                              call) != scope_endings.end()) {
@@ -122,18 +125,18 @@ bool check_call_for_conflict(CallBase *mpi_call,
           current_inst = nullptr;
           Debug(errs() << "Call To request Free encounterd without finding any "
                           "conflicts\n";);
-          return true;
+          return false;
 
         } else if (is_sending && is_send_function(call->getCalledFunction())) {
 
           if (are_calls_conflicting(mpi_call, call, is_sending)) {
             // end analysis: conflict found
-            return false;
+            return true;
           }
         } else if (!is_sending && is_recv_function(call->getCalledFunction())) {
           if (are_calls_conflicting(mpi_call, call, is_sending)) {
             // end analysis: conflict found
-            return false;
+            return true;
           }
         }
         // else: Nothing to check
@@ -143,7 +146,7 @@ bool check_call_for_conflict(CallBase *mpi_call,
         if (function_metadata->may_conflict(call->getCalledFunction())) {
           Debug(errs() << "Call To " << call->getCalledFunction()->getName()
                        << "May conflict\n";);
-          return false;
+          return true;
         } else if (function_metadata->is_unknown(call->getCalledFunction())) {
           Debug(
               errs()
@@ -152,7 +155,7 @@ bool check_call_for_conflict(CallBase *mpi_call,
                   << "will result in a conflict, for safety we will assume it "
                      "does \n";);
           // assume conflict
-          return false;
+          return true;
         }
       }
     } // end if CallBase
@@ -246,7 +249,7 @@ bool check_call_for_conflict(CallBase *mpi_call,
 
   // no conflict found, bot one may be present after this anslysis, if it hasnt
   // determined the ending of the requests score
-  return false;
+  return true;
 }
 
 /*
@@ -580,6 +583,9 @@ std::vector<CallBase *> get_scope_endings(CallBase *call) {
       }
     }
     return scope_endings;
+  } else if (F == mpi_func->mpi_send_init || F == mpi_func->mpi_recv_init) {
+
+    return get_corresponding_free(call);
   } else {
     // no I.. call: no scope ending
     return {};
@@ -728,6 +734,55 @@ std::vector<CallBase *> get_corresponding_wait(CallBase *call) {
       gep->dump();
       errs() << "Strange, out of bounds getelemptr instruction should not "
                 "happen in this case\n";
+    }
+  }
+
+  if (result.empty()) {
+    errs() << "could not determine scope of \n";
+    call->dump();
+    errs() << "Assuming it will finish at mpi_finalize.\n"
+           << "The Analysis result is still valid, although the chance of "
+              "false positives is higher\n";
+  }
+
+  // mpi finalize will end all communication nontheles
+  for (auto *user : mpi_func->mpi_finalize->users()) {
+    if (auto *finalize_call = dyn_cast<CallBase>(user)) {
+      assert(finalize_call->getCalledFunction() == mpi_func->mpi_finalize);
+      result.push_back(finalize_call);
+    }
+  }
+
+  return result;
+}
+
+std::vector<CallBase *> get_corresponding_free(CallBase *call) {
+
+  // errs() << "Analyzing scope of \n";
+  // call->dump();
+
+  std::vector<CallBase *> result;
+  unsigned int req_arg_pos = 6;
+
+  assert(call->getCalledFunction() == mpi_func->mpi_send_init ||
+         call->getCalledFunction() == mpi_func->mpi_recv_init);
+  assert(call->getNumArgOperands() == 7);
+
+  Value *req = call->getArgOperand(req_arg_pos);
+
+  // req->dump();
+  if (auto *alloc = dyn_cast<AllocaInst>(req)) {
+    for (auto *user : alloc->users()) {
+      if (auto *other_call = dyn_cast<CallBase>(user)) {
+        if (other_call->getCalledFunction() == mpi_func->mpi_request_free) {
+          assert(other_call->getNumArgOperands() == 1);
+          assert(other_call->getArgOperand(0) == req);
+          // found end of scope
+          // errs() << "possible ending of scope here \n";
+          // other_call->dump();
+          result.push_back(other_call);
+        }
+      }
     }
   }
 
