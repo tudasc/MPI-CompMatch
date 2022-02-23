@@ -53,7 +53,6 @@ goods and services.
 #include <unistd.h>
 #include <climits>
 #include <math.h>
-#include <stdio.h>
 
 #if 1
 namespace sys {
@@ -434,8 +433,6 @@ namespace async_suite {
     void AsyncBenchmark_persistentpt2pt::init() {
             AsyncBenchmark::init();
             calc.init();
-            std::cout << "my code runs\n";
-
         }
 
         bool AsyncBenchmark_persistentpt2pt::benchmark(int count, MPI_Datatype datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) {
@@ -452,13 +449,14 @@ namespace async_suite {
             MPI_Request request_s;
             MPI_Request request_r;
 
-            MPI_Send_init((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request_s);
-                                MPI_Recv_init((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD,
-                                          &request_r);
+
             calc.reqs = nullptr;
             calc.num_requests = 0;
             if (group % 2 == 0) {
                 pair = rank + stride;
+
+                MPI_Send_init((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request_s);
+                            MPI_Recv_init((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD, &request_r);
                 for (int i = 0; i < ncycles + nwarmup; i++) {
                     if (i == nwarmup) t1 = MPI_Wtime();
 MPI_Start(&request_s);
@@ -477,8 +475,12 @@ MPI_Start(&request_r);
                 ctime = total_ctime / ncycles;
                 tover_comm = total_tover_comm / ncycles;
                 tover_calc = total_tover_calc / ncycles;
+                MPI_Request_free(&request_s);
+                MPI_Request_free(&request_r);
             } else {
                 pair = rank - stride;
+                MPI_Send_init((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request_s);
+                            MPI_Recv_init((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD, &request_r);
                 for (int i = 0; i < ncycles + nwarmup; i++) {
                     if (i == nwarmup) t1 = MPI_Wtime();
                     MPI_Start(&request_s);
@@ -490,13 +492,15 @@ MPI_Start(&request_r);
                         total_tover_calc += local_tover_calc;
                     }
                     MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
-                    MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
+                    MPI_Wait(&request_r, MPI_STATUSES_IGNORE);
                 }
                 t2 = MPI_Wtime();
                 time = (t2 - t1) / ncycles;
                 ctime = total_ctime / ncycles;
                 tover_comm = total_tover_comm / ncycles;
                 tover_calc = total_tover_calc / ncycles;
+                MPI_Request_free(&request_s);
+                MPI_Request_free(&request_r);
             }
             MPI_Barrier(MPI_COMM_WORLD);
             results[count] = result { true, time, time - ctime + tover_comm, tover_calc, ncycles };
