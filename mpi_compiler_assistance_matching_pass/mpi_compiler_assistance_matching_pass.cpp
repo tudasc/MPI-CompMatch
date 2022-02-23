@@ -90,7 +90,7 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
   // Pass starts here
   virtual bool runOnModule(Module &M) {
 
-    //Debug(M.dump(););
+    // Debug(M.dump(););
 
     mpi_func = get_used_mpi_functions(M);
     if (!is_mpi_used(mpi_func)) {
