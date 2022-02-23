@@ -126,6 +126,14 @@ namespace async_suite {
         DEFINE_INHERITED(AsyncBenchmark_ipt2pt, BenchmarkSuite<BS_GENERIC>);
     };
 
+    class AsyncBenchmark_persistentpt2pt : public AsyncBenchmark {
+          public:
+          AsyncBenchmark_calc calc;
+          virtual void init() override;
+          virtual bool benchmark(int count, MPI_Datatype datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) override;
+          DEFINE_INHERITED(AsyncBenchmark_persistentpt2pt, BenchmarkSuite<BS_GENERIC>);
+      };
+
     class AsyncBenchmark_allreduce : public AsyncBenchmark {
         public:
         virtual bool benchmark(int count, MPI_Datatype datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) override;

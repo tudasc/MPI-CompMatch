@@ -388,8 +388,8 @@ namespace async_suite {
             pair = rank + stride;
             for (int i = 0; i < ncycles + nwarmup; i++) {
                 if (i == nwarmup) t1 = MPI_Wtime();
-                MPI_Isend((char*)sbuf  + (i%n)*b, count, datatype, pair, tag, MPI_COMM_WORLD, &request[0]);
-                MPI_Irecv((char*)rbuf + (i%n)*b, count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD, 
+                MPI_Isend((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request[0]);
+                MPI_Irecv((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD,
                           &request[1]);
                 calc.benchmark(count, datatype, 0, 1, local_ctime, local_tover_comm, local_tover_calc);
                 if (i >= nwarmup) {
@@ -408,8 +408,8 @@ namespace async_suite {
             pair = rank - stride;
             for (int i = 0; i < ncycles + nwarmup; i++) {
                 if (i == nwarmup) t1 = MPI_Wtime();
-                MPI_Isend((char*)sbuf + (i%n)*b, count, datatype, pair, tag, MPI_COMM_WORLD, &request[0]);
-                MPI_Irecv((char*)rbuf + (i%n)*b, count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD, 
+                MPI_Isend((char*)sbuf , count, datatype, pair, tag, MPI_COMM_WORLD, &request[0]);
+                MPI_Irecv((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD,
                           &request[1]);
                 calc.benchmark(count, datatype, 0, 1, local_ctime, local_tover_comm, local_tover_calc);
                 if (i >= nwarmup) {
@@ -429,6 +429,76 @@ namespace async_suite {
         results[count] = result { true, time, time - ctime + tover_comm, tover_calc, ncycles };
         return true;
     }
+
+    void AsyncBenchmark_persistentpt2pt::init() {
+            AsyncBenchmark::init();
+            calc.init();
+        }
+
+        bool AsyncBenchmark_persistentpt2pt::benchmark(int count, MPI_Datatype datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) {
+            if (!is_rank_active) {
+                MPI_Barrier(MPI_COMM_WORLD);
+                return false;
+            }
+            size_t b = (size_t)count * (size_t)dtsize;
+            size_t n = allocated_size / b;
+            double t1 = 0, t2 = 0, ctime = 0, total_ctime = 0, total_tover_comm = 0, total_tover_calc = 0,
+                                              local_ctime = 0, local_tover_comm = 0, local_tover_calc = 0;
+            const int tag = 1;
+            int pair = -1;
+            MPI_Request request_s;
+            MPI_Request request_r;
+
+            MPI_Send_init((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request_s);
+                                MPI_Recv_init((char*)rbuf , count, datatype, pair, MPI_ANY_TAG, MPI_COMM_WORLD,
+                                          &request_r);
+            calc.reqs = nullptr;
+            calc.num_requests = 0;
+            if (group % 2 == 0) {
+                pair = rank + stride;
+                for (int i = 0; i < ncycles + nwarmup; i++) {
+                    if (i == nwarmup) t1 = MPI_Wtime();
+MPI_Start(&request_s);
+MPI_Start(&request_r);
+                    calc.benchmark(count, datatype, 0, 1, local_ctime, local_tover_comm, local_tover_calc);
+                    if (i >= nwarmup) {
+                        total_ctime += local_ctime;
+                        total_tover_comm += local_tover_comm;
+                        total_tover_calc += local_tover_calc;
+                    }
+                    MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
+                    MPI_Wait(&request_r, MPI_STATUSES_IGNORE);
+                }
+                t2 = MPI_Wtime();
+                time = (t2 - t1) / ncycles;
+                ctime = total_ctime / ncycles;
+                tover_comm = total_tover_comm / ncycles;
+                tover_calc = total_tover_calc / ncycles;
+            } else {
+                pair = rank - stride;
+                for (int i = 0; i < ncycles + nwarmup; i++) {
+                    if (i == nwarmup) t1 = MPI_Wtime();
+                    MPI_Start(&request_s);
+                    MPI_Start(&request_r);
+                    calc.benchmark(count, datatype, 0, 1, local_ctime, local_tover_comm, local_tover_calc);
+                    if (i >= nwarmup) {
+                        total_ctime += local_ctime;
+                        total_tover_comm += local_tover_comm;
+                        total_tover_calc += local_tover_calc;
+                    }
+                    MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
+                    MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
+                }
+                t2 = MPI_Wtime();
+                time = (t2 - t1) / ncycles;
+                ctime = total_ctime / ncycles;
+                tover_comm = total_tover_comm / ncycles;
+                tover_calc = total_tover_calc / ncycles;
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
+            results[count] = result { true, time, time - ctime + tover_comm, tover_calc, ncycles };
+            return true;
+        }
 
 #define EXTRA_BARRIER 0
 
@@ -918,6 +988,7 @@ namespace async_suite {
 
     DECLARE_INHERITED(AsyncBenchmark_pt2pt, sync_pt2pt)
     DECLARE_INHERITED(AsyncBenchmark_ipt2pt, async_pt2pt)
+	DECLARE_INHERITED(AsyncBenchmark_persistentpt2pt, async_ipt2pt)
     DECLARE_INHERITED(AsyncBenchmark_allreduce, sync_allreduce)
     DECLARE_INHERITED(AsyncBenchmark_iallreduce, async_allreduce)
     DECLARE_INHERITED(AsyncBenchmark_na2a, sync_na2a)
