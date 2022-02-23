@@ -49,6 +49,7 @@
 #include "function_coverage.h"
 #include "implementation_specific.h"
 #include "mpi_functions.h"
+#include "replacement.h"
 
 using namespace llvm;
 
@@ -137,10 +138,16 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
                                         check_mpi_recv_conflicts),
                          recv_init_list.end());
 
-    errs() << "No conflicts found For sending Ops:\n";
-    for (auto s : send_init_list) {
-      s->dump();
+    bool replacement = !send_init_list.empty() && !recv_init_list.empty();
+    // otherwise nothing should be done
+    if (replacement) {
+
+      errs() << "Replace " << send_init_list.size() << " send Operations \nand "
+             << recv_init_list.size() << " receive Operations\n";
+      replace_communication_calls(send_init_list, recv_init_list);
     }
+
+    M.dump();
 
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;
@@ -149,7 +156,7 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
 
     delete function_metadata;
 
-    return false;
+    return replacement;
   }
 };
 // class MSGOrderRelaxCheckerPass
