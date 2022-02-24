@@ -27,8 +27,10 @@ bool is_mpi_call(CallBase *call) {
 }
 
 bool is_mpi_function(llvm::Function *f) {
-  return f->getName().contains("MPI");
-  ;
+  if (f) {
+    return f->getName().contains("MPI");
+  } else
+    return false;
 }
 
 std::vector<CallBase *> gather_all_calls(Function *f) {
@@ -180,7 +182,7 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
   }
 
   // construct the init and finish functions, if necessary:
-  if (result->mpi_send_init && result->mpi_recv_init) {
+  if (result->mpi_init || result->mpi_finalize) {
     // void funcs that do not have params
     auto *ftype = FunctionType::get(Type::getVoidTy(M.getContext()), false);
     result->optimized.init =

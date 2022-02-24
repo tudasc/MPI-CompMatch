@@ -31,12 +31,20 @@ using namespace llvm;
 bool add_init(llvm::Module &M) {
 
   bool result = false;
-  for (auto *u : mpi_func->mpi_init->users()) {
-    if (auto *call = dyn_cast<CallBase>(u)) {
-      // MPI_Init should not be in an invoke inst
-      IRBuilder<> builder(call->getNextNode());
-      builder.CreateCall(mpi_func->optimized.init);
-      result = true;
+  if (mpi_func->mpi_init) {
+    assert(mpi_func->optimized.init);
+    for (auto *u : mpi_func->mpi_init->users()) {
+      if (auto *call = dyn_cast<CallBase>(u)) {
+
+        auto *insert_pt = call->getNextNode();
+        if (auto *invoke = dyn_cast<InvokeInst>(call)) {
+          insert_pt = invoke->getNormalDest()->getFirstNonPHI();
+        }
+
+        IRBuilder<> builder(insert_pt);
+        builder.CreateCall(mpi_func->optimized.init);
+        result = true;
+      }
     }
   }
   return result;
@@ -44,11 +52,14 @@ bool add_init(llvm::Module &M) {
 
 bool add_finalize(llvm::Module &M) {
   bool result = false;
-  for (auto *u : mpi_func->mpi_finalize->users()) {
-    if (auto *call = dyn_cast<CallBase>(u)) {
-      IRBuilder<> builder(call);
-      builder.CreateCall(mpi_func->optimized.finalize);
-      result = true;
+  if (mpi_func->mpi_finalize) {
+    assert(mpi_func->optimized.finalize);
+    for (auto *u : mpi_func->mpi_finalize->users()) {
+      if (auto *call = dyn_cast<CallBase>(u)) {
+        IRBuilder<> builder(call);
+        builder.CreateCall(mpi_func->optimized.finalize);
+        result = true;
+      }
     }
   }
   return result;

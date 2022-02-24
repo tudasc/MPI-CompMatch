@@ -111,20 +111,23 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
     std::vector<llvm::CallBase *> send_init_list;
     std::vector<llvm::CallBase *> recv_init_list;
 
-    for (auto *u : mpi_func->mpi_send_init->users()) {
-      if (auto *call = dyn_cast<CallBase>(u)) {
-        if (call->getCalledFunction() == mpi_func->mpi_send_init) {
-          // not that I think anyone will pass a ptr to MPI func into another
-          // func, but better save than sorry
-          send_init_list.push_back(call);
+    if (mpi_func->mpi_send_init) {
+      for (auto *u : mpi_func->mpi_send_init->users()) {
+        if (auto *call = dyn_cast<CallBase>(u)) {
+          if (call->getCalledFunction() == mpi_func->mpi_send_init) {
+            // not that I think anyone will pass a ptr to MPI func into another
+            // func, but better save than sorry
+            send_init_list.push_back(call);
+          }
         }
       }
     }
-
-    for (auto *u : mpi_func->mpi_recv_init->users()) {
-      if (auto *call = dyn_cast<CallBase>(u)) {
-        if (call->getCalledFunction() == mpi_func->mpi_recv_init) {
-          recv_init_list.push_back(call);
+    if (mpi_func->mpi_recv_init) {
+      for (auto *u : mpi_func->mpi_recv_init->users()) {
+        if (auto *call = dyn_cast<CallBase>(u)) {
+          if (call->getCalledFunction() == mpi_func->mpi_recv_init) {
+            recv_init_list.push_back(call);
+          }
         }
       }
     }
