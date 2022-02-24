@@ -1,4 +1,3 @@
-
 #include <mpi.h>
 #include <ucp/api/ucp.h>
 
@@ -20,7 +19,9 @@
 // count is not part of the message envelope
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-//#define STATISTIC_PRINTING
+#define CONNECTION_CREATE_WAIT_THRESHOLD 32
+
+#define STATISTIC_PRINTING
 
 // end config
 
@@ -56,8 +57,9 @@ struct mpiopt_request {
   int tag;
   int dest;
   MPI_Comm comm;
-  MPI_Request rdma_exchange_request;
+  // MPI_Request rdma_exchange_request;
   MPI_Request rdma_exchange_request_send;
+  void *rdma_info_buf;
   // struct mpiopt_request* rdma_exchange_buffer;
 };
 typedef struct mpiopt_request MPIOPT_Request;
@@ -65,21 +67,18 @@ typedef struct mpiopt_request MPIOPT_Request;
 MPI_Win global_comm_win;
 int dummy_int = 0;
 
-struct matching_info {
-  int dummy;
-};
-
 void empty_function(void *request, ucs_status_t status) {
   // callback if flush is completed
 }
 
+static void receive_rdma_info(MPIOPT_Request *request);
 static int MPIOPT_Start_internal(MPIOPT_Request *request);
 static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status);
 static int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
                                 MPI_Status *status);
-static int MPIOPT_Send_init_internal(const void *buf, int count,
-                                     MPI_Datatype datatype, int dest, int tag,
-                                     MPI_Comm comm, MPIOPT_Request *request);
+static int init_request(const void *buf, int count, MPI_Datatype datatype,
+                        int dest, int tag, MPI_Comm comm,
+                        MPIOPT_Request *request);
 static int MPIOPT_Recv_init_internal(void *buf, int count,
                                      MPI_Datatype datatype, int source, int tag,
                                      MPI_Comm comm, MPIOPT_Request *request);
@@ -247,9 +246,9 @@ static void b_recv(MPIOPT_Request *request) {
 
     assert(status == UCS_OK || status == UCS_INPROGRESS);
     /*
-    if (status != UCS_OK && status != UCS_INPROGRESS) {
-      printf("ERROR in RDMA GET\n");
-    }*/
+     if (status != UCS_OK && status != UCS_INPROGRESS) {
+     printf("ERROR in RDMA GET\n");
+     }*/
     // ensure order:
     status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
     assert(status == UCS_OK || status == UCS_INPROGRESS);
@@ -347,31 +346,25 @@ static void e_recv(MPIOPT_Request *request) {
   } // else: nothing to do, the op has finished
 }
 
-// exchanges the RDMA info
-static void exchange_rdma_info(MPIOPT_Request *request) {
-#ifdef STATISTIC_PRINTING
-  printf("RDMA  connection established\n");
-#endif
+// exchanges the RDMA info and maps all mem for RDMA op
+static void send_rdma_info(MPIOPT_Request *request) {
 
   assert(request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION ||
          request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
 
   uint64_t flag_ptr = &request->flag;
+  uint64_t data_ptr = request->buf;
   // MPIOPT_Request info_to_send;
+
+  // send uses complementary tag to receive
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+  if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
+  }
 
   ompi_osc_ucx_module_t *module =
       (ompi_osc_ucx_module_t *)global_comm_win->w_osc_module;
   ucp_ep_h ep = request->ep;
-
-  // TODO sendrecv to avoid deadlock
-  MPI_Send(&flag_ptr, sizeof(uint64_t), MPI_BYTE, request->dest,
-           COMM_BEGIN_TAG + request->tag, MPI_COMM_WORLD);
-  MPI_Recv(&request->remote_flag_addr, sizeof(uint64_t), MPI_BYTE,
-           request->dest, COMM_BEGIN_TAG + request->tag, MPI_COMM_WORLD,
-           MPI_STATUS_IGNORE);
-
-  int tag_rkey_data = 32767 + 32767 + request->tag;
-  int tag_rkey_flag = tag_rkey_data;
 
   ucp_context_h context = mca_osc_ucx_component.ucp_context;
   // prepare buffer for RDMA access:
@@ -390,19 +383,13 @@ static void exchange_rdma_info(MPIOPT_Request *request) {
   ucp_status = ucp_mem_map(context, &mem_params, &request->mem_handle_data);
   assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
-  void *rkey_buffer;
-  size_t rkey_size;
+  void *rkey_buffer_data;
+  size_t rkey_size_data;
 
   // pack a remote memory key
-  ucp_status = ucp_rkey_pack(context, request->mem_handle_data, &rkey_buffer,
-                             &rkey_size);
+  ucp_status = ucp_rkey_pack(context, request->mem_handle_data,
+                             &rkey_buffer_data, &rkey_size_data);
   assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
-
-  MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, request->dest, tag_rkey_data,
-           MPI_COMM_WORLD);
-
-  // free temp buf
-  ucp_rkey_buffer_release(rkey_buffer);
 
   memset(&mem_params, 0, sizeof(ucp_mem_map_params_t));
 
@@ -412,61 +399,109 @@ static void exchange_rdma_info(MPIOPT_Request *request) {
   mem_params.field_mask =
       UCP_MEM_MAP_PARAM_FIELD_ADDRESS | UCP_MEM_MAP_PARAM_FIELD_LENGTH;
 
+  void *rkey_buffer_flag;
+  size_t rkey_size_flag;
+
   ucp_status = ucp_mem_map(context, &mem_params, &request->mem_handle_flag);
   assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
   // pack a remote memory key
-  ucp_status = ucp_rkey_pack(context, request->mem_handle_flag, &rkey_buffer,
-                             &rkey_size);
+  ucp_status = ucp_rkey_pack(context, request->mem_handle_flag,
+                             &rkey_buffer_flag, &rkey_size_flag);
   assert(ucp_status == UCS_OK && "Error in register mem for RDMA operation");
 
-  MPI_Send(rkey_buffer, rkey_size, MPI_BYTE, request->dest, tag_rkey_flag,
-           MPI_COMM_WORLD);
+  size_t msg_size = sizeof(size_t) * 2 + sizeof(uint64_t) * 2 + rkey_size_data +
+                    rkey_size_flag + sizeof(uint64_t) * 2;
+  request->rdma_info_buf = calloc(msg_size, 1);
+
+  // populate the buffer
+  char *current_pos = request->rdma_info_buf;
+  *(size_t *)current_pos = rkey_size_data;
+  current_pos += sizeof(size_t);
+  *(size_t *)current_pos = rkey_size_flag;
+  current_pos += sizeof(size_t);
+  *(u_int64_t *)current_pos = data_ptr;
+  current_pos += sizeof(u_int64_t);
+  *(u_int64_t *)current_pos = flag_ptr;
+  current_pos += sizeof(u_int64_t);
+  memcpy(current_pos, rkey_buffer_data, rkey_size_data);
+  current_pos += rkey_size_data;
+  current_pos += sizeof(u_int64_t); // null termination
+  memcpy(current_pos, rkey_buffer_flag, rkey_size_flag);
+  current_pos += rkey_size_flag;
+  current_pos += sizeof(u_int64_t); // null termination
+
+  assert(msg_size + request->rdma_info_buf == current_pos);
+
+  MPI_Isend(request->rdma_info_buf, msg_size, MPI_BYTE, request->dest,
+            tag_to_use, request->comm, &request->rdma_exchange_request_send);
 
   // free temp buf
-  ucp_rkey_buffer_release(rkey_buffer);
+  ucp_rkey_buffer_release(rkey_buffer_flag);
+  ucp_rkey_buffer_release(rkey_buffer_data);
+}
 
-  void *temp_buf;
+static void receive_rdma_info(MPIOPT_Request *request) {
+
+  assert(request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION ||
+         request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
+
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+  if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
+  }
+
   MPI_Status status;
-  int temp_buf_count;
-  MPI_Probe(request->dest, tag_rkey_data, MPI_COMM_WORLD, &status);
-  MPI_Get_count(&status, MPI_BYTE, &temp_buf_count);
-  temp_buf = calloc(temp_buf_count, 1);
-  MPI_Recv(temp_buf, temp_buf_count, MPI_BYTE, request->dest, tag_rkey_data,
-           MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  ucp_ep_rkey_unpack(ep, temp_buf, &request->remote_data_rkey);
-  free(temp_buf);
+  // here, we can use blocking probe: we have i-probed before
+  MPI_Probe(request->dest, tag_to_use, request->comm, &status);
 
-  // TODO use MPROBE for multi threading
-  MPI_Probe(request->dest, tag_rkey_flag, MPI_COMM_WORLD, &status);
-  MPI_Get_count(&status, MPI_BYTE, &temp_buf_count);
-  temp_buf = calloc(temp_buf_count, 1);
-  MPI_Recv(temp_buf, temp_buf_count, MPI_BYTE, request->dest, tag_rkey_flag,
-           MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  ucp_ep_rkey_unpack(ep, temp_buf, &request->remote_flag_rkey);
-  free(temp_buf);
+  int count = 0;
+  MPI_Get_count(&status, MPI_BYTE, &count);
 
-  // printf("Rank %d: buffer: %p
-  // remote:%p\n",rank,buffer,info.remote_data_addr); printf("Rank %d:
-  // flagbuffer: %p flagremote:%p\n",rank,&info,info.remote_flag_addr);
+  char *tmp_buf = calloc(count, 1);
 
-#ifndef DNDEBUG
-  // probe for the Msg that the communication will end
-  int flag;
-  MPI_Iprobe(request->dest, COMM_BEGIN_TAG + request->tag, request->comm, &flag,
-             MPI_STATUS_IGNORE);
-  assert(flag == 0);
-  // nice for attaching the debugger:
-  MPI_Barrier(MPI_COMM_WORLD);
+  MPI_Recv(tmp_buf, count, MPI_BYTE, request->dest, tag_to_use, request->comm,
+           MPI_STATUS_IGNORE);
+
+  size_t rkey_size_flag;
+  size_t rkey_size_data;
+  // read the buffer
+  char *current_pos = tmp_buf;
+  rkey_size_data = *(size_t *)current_pos;
+  current_pos += sizeof(size_t);
+  rkey_size_flag = *(size_t *)current_pos;
+  current_pos += sizeof(size_t);
+  request->remote_data_addr = *(u_int64_t *)current_pos;
+  current_pos += sizeof(u_int64_t);
+  request->remote_flag_addr = *(u_int64_t *)current_pos;
+  current_pos += sizeof(u_int64_t);
+  ucp_ep_rkey_unpack(request->ep, current_pos, &request->remote_data_rkey);
+  current_pos += rkey_size_data;
+  current_pos += sizeof(u_int64_t); // null termination
+  ucp_ep_rkey_unpack(request->ep, current_pos, &request->remote_flag_rkey);
+  current_pos += rkey_size_flag;
+  current_pos += sizeof(u_int64_t); // null termination
+
+  assert(count + tmp_buf == current_pos);
+
+  free(tmp_buf);
+
+#ifdef STATISTIC_PRINTING
+  printf("RDMA  connection established\n");
 #endif
 }
 
+// TODO
 static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
+
   int flag;
-  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+  int tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
+  MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+             MPI_STATUS_IGNORE);
+
   if (flag) {
     // found matching counterpart
-    exchange_rdma_info(request);
+    // exchange_rdma_info(request);
     request->type = SEND_REQUEST_TYPE;
     b_send(request); // start RDMA
   } else {
@@ -477,11 +512,14 @@ static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 }
 
 static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
+
   int flag;
-  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+  MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+             MPI_STATUS_IGNORE);
   if (flag) {
     // found matching counterpart
-    exchange_rdma_info(request);
+    // exchange_rdma_info(request);
     request->type = RECV_REQUEST_TYPE;
     b_recv(request); // start RDMA
   } else {
@@ -494,7 +532,7 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
 // TODO return proper error codes
 static int MPIOPT_Start_internal(MPIOPT_Request *request) {
 
-  // TODO atomic increment for multi thhreading
+  // TODO atomic increment for multi threading
   request->operation_number++;
 
   // TODO switch ?
@@ -519,13 +557,15 @@ static int MPIOPT_Start_internal(MPIOPT_Request *request) {
 }
 
 static void wait_send_when_searching_for_connection(MPIOPT_Request *request) {
+  int tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
   int flag;
-  MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+
   while (!flag) {
-    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+    MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+               MPI_STATUS_IGNORE);
     if (flag) {
       // found matching counterpart
-      exchange_rdma_info(request);
+      receive_rdma_info(request);
       request->type = SEND_REQUEST_TYPE;
       MPI_Cancel(
           &request->backup_request); // we have issued this operation before
@@ -539,14 +579,18 @@ static void wait_send_when_searching_for_connection(MPIOPT_Request *request) {
   }
 }
 // end while, either backup comm finished, or RDMA connection was}
-void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
-  int flag;
-  MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
+
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+
+  int flag = 0;
+
   while (!flag) {
-    MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+    MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+               MPI_STATUS_IGNORE);
     if (flag) {
       // found matching counterpart
-      exchange_rdma_info(request);
+      receive_rdma_info(request);
       request->type = RECV_REQUEST_TYPE;
       MPI_Cancel(
           &request->backup_request); // we have issued this operation before
@@ -590,42 +634,35 @@ static int MPIOPT_Test_internal(MPIOPT_Request *request, int *flag,
   // TODO implement
 }
 
-static int MPIOPT_Send_init_internal(const void *buf, int count,
-                                     MPI_Datatype datatype, int dest, int tag,
-                                     MPI_Comm comm, MPIOPT_Request *request) {
+static int init_request(const void *buf, int count, MPI_Datatype datatype,
+                        int dest, int tag, MPI_Comm comm,
+                        MPIOPT_Request *request) {
 
   // TODO support other dtypes as MPI_BYTE
   assert(datatype == MPI_BYTE);
-  assert(tag < 32767); // 32767 is the minimum value of MPI_TAG_UB required by
-                       // mpi standard
-
-  memset(request, 0, sizeof(MPIOPT_Request));
+  assert(tag < COMM_BEGIN_TAG); // 32767 is the minimum value of MPI_TAG_UB
+                                // required by mpi standard, we define it as
+                                // TAG_UB for our optimization
   int rank, numtasks;
   // Welchen rang habe ich?
   MPI_Comm_rank(comm, &rank);
   // wie viele Tasks gibt es?
   MPI_Comm_size(comm, &numtasks);
 
+#ifndef DNDEBUG
   int max_tag_allowed, bool_flag;
 
   MPI_Attr_get(comm, MPI_TAG_UB, &max_tag_allowed, &bool_flag);
   assert(bool_flag);
   // maximum tag used for communication when we exchange the rdma data
-  assert(32767 + 32767 + tag < max_tag_allowed);
+  assert(COMM_BEGIN_TAG + COMM_BEGIN_TAG + tag < max_tag_allowed);
+#endif
 
   uint64_t buffer_ptr = buf;
 
   ompi_osc_ucx_module_t *module =
       (ompi_osc_ucx_module_t *)global_comm_win->w_osc_module;
   ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, dest);
-
-  // TODO IBSEND == to cancel it
-  MPI_Send(&buffer_ptr, sizeof(uint64_t), MPI_BYTE, dest, COMM_BEGIN_TAG + tag,
-           MPI_COMM_WORLD);
-  // TODO USE request->rdma_exchange_request_send
-  MPI_Irecv(&request->remote_data_addr, sizeof(uint64_t), MPI_BYTE, dest,
-            COMM_BEGIN_TAG + tag, MPI_COMM_WORLD,
-            &request->rdma_exchange_request);
 
   request->ep = ep;
   request->buf = buf;
@@ -635,52 +672,71 @@ static int MPIOPT_Send_init_internal(const void *buf, int count,
   request->comm = comm;
   request->backup_request = MPI_REQUEST_NULL;
 
-  request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
+  send_rdma_info(request);
 
-  int flag;
-  // MPI_Status stat;
-  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-  if (flag) {
-    // found matching counterpart
-    exchange_rdma_info(request);
-    request->type = SEND_REQUEST_TYPE;
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+  if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
   }
+
+  int flag = 0;
+  int wait_count = 0;
+  while (!flag || wait_count < CONNECTION_CREATE_WAIT_THRESHOLD) {
+    MPI_Iprobe(request->dest, tag_to_use, MPI_COMM_WORLD, &flag,
+               MPI_STATUS_IGNORE);
+    wait_count++;
+  }
+  if (flag) {
+    receive_rdma_info(request);
+    if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+      request->type = RECV_REQUEST_TYPE;
+    } else {
+      assert(request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
+      request->type = SEND_REQUEST_TYPE;
+    }
+  }
+
+  return MPI_SUCCESS;
 }
 
 static int MPIOPT_Recv_init_internal(void *buf, int count,
                                      MPI_Datatype datatype, int source, int tag,
                                      MPI_Comm comm, MPIOPT_Request *request) {
-  // it does the same as send_init (exchange RDMA parameters to setup comm)
 
-  MPIOPT_Send_init_internal(buf, count, datatype, source, tag, comm, request);
+  memset(request, 0, sizeof(MPIOPT_Request));
+  request->type = RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
+  return init_request(buf, count, datatype, source, tag, comm, request);
+}
 
-  if (request->type == SEND_REQUEST_TYPE) {
-    request->type = RECV_REQUEST_TYPE;
-  } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    request->type = RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
-  } else {
-    assert(false && "ERROR");
-  }
+static int MPIOPT_Send_init_internal(void *buf, int count,
+                                     MPI_Datatype datatype, int source, int tag,
+                                     MPI_Comm comm, MPIOPT_Request *request) {
+
+  memset(request, 0, sizeof(MPIOPT_Request));
+  request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
+  return init_request(buf, count, datatype, source, tag, comm, request);
 }
 
 // TODO this is blocking: we may want to do it non-blocking and free all
 // leftover ressources at the end?
 static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
+  // cancel any search for RDMA connection, if necessary
+  int flag;
+  MPI_Test(&request->rdma_exchange_request_send, &flag, MPI_STATUS_IGNORE);
+  if (!flag) {
+
+    MPI_Cancel(&request->rdma_exchange_request_send);
+    MPI_Wait(&request->rdma_exchange_request_send, MPI_STATUS_IGNORE);
+  }
+
+  free(request->rdma_info_buf);
+
   if (request->type == RECV_REQUEST_TYPE ||
       request->type == SEND_REQUEST_TYPE) {
     // otherwise all these ressources where never aquired
 
     acknowlege_Request_free(request);
-  }
-
-  // cancel any search for RDMA connection, if necessary
-  int flag;
-  MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-  if (!flag) {
-
-    MPI_Cancel(&request->rdma_exchange_request);
-    MPI_Wait(&request->rdma_exchange_request, MPI_STATUS_IGNORE);
   }
 
   // cancel backup comm, if it was initialized when waiting for RDMa connection
@@ -693,6 +749,8 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   }
 
   request->type = 0; // uninitialized
+
+  return MPI_SUCCESS;
 }
 
 void MPIOPT_INIT() {
