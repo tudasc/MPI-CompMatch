@@ -60,8 +60,9 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
     Function *f = &*it;
     if (f->getName().equals("MPI_Init")) {
       result->mpi_init = f;
-      // should not be called twice anyway, so no need to handle it
-      // result->conflicting_functions.insert(f);
+
+    } else if (f->getName().equals("MPI_Init_thread")) {
+      result->mpi_init_thread = f;
 
       // sync functions:
     } else if (f->getName().equals("MPI_Finalize")) {
@@ -182,7 +183,7 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
   }
 
   // construct the init and finish functions, if necessary:
-  if (result->mpi_init || result->mpi_finalize) {
+  if (result->mpi_init || result->mpi_init_thread || result->mpi_finalize) {
     // void funcs that do not have params
     auto *ftype = FunctionType::get(Type::getVoidTy(M.getContext()), false);
     result->optimized.init =

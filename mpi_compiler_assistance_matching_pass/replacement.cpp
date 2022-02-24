@@ -47,6 +47,23 @@ bool add_init(llvm::Module &M) {
       }
     }
   }
+
+  if (mpi_func->mpi_init_thread) {
+    assert(mpi_func->optimized.init);
+    for (auto *u : mpi_func->mpi_init_thread->users()) {
+      if (auto *call = dyn_cast<CallBase>(u)) {
+
+        auto *insert_pt = call->getNextNode();
+        if (auto *invoke = dyn_cast<InvokeInst>(call)) {
+          insert_pt = invoke->getNormalDest()->getFirstNonPHI();
+        }
+
+        IRBuilder<> builder(insert_pt);
+        builder.CreateCall(mpi_func->optimized.init);
+        result = true;
+      }
+    }
+  }
   return result;
 }
 

@@ -41,6 +41,7 @@ struct mpiopt_functions {
 
 struct mpi_functions {
   llvm::Function *mpi_init = nullptr;
+  llvm::Function *mpi_init_thread = nullptr;
   llvm::Function *mpi_finalize = nullptr;
 
   llvm::Function *mpi_send = nullptr;
