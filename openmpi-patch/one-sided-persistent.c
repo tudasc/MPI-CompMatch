@@ -487,7 +487,14 @@ static void receive_rdma_info(MPIOPT_Request *request) {
   free(tmp_buf);
 
 #ifdef STATISTIC_PRINTING
-  printf("RDMA  connection established\n");
+
+  int rank = 0;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    printf("Rank %d: SENDING: RDMA connection established\n", rank);
+  } else {
+    printf("Rank %d: RECV: RDMA connection established \n", rank);
+  }
 #endif
 }
 
@@ -681,7 +688,7 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 
   int flag = 0;
   int wait_count = 0;
-  while (!flag || wait_count < CONNECTION_CREATE_WAIT_THRESHOLD) {
+  while (!flag && wait_count < CONNECTION_CREATE_WAIT_THRESHOLD) {
     MPI_Iprobe(request->dest, tag_to_use, MPI_COMM_WORLD, &flag,
                MPI_STATUS_IGNORE);
     wait_count++;
