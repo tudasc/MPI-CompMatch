@@ -758,8 +758,8 @@ std::vector<CallBase *> get_corresponding_wait(CallBase *call) {
 
 std::vector<CallBase *> get_corresponding_free(CallBase *call) {
 
+  // call->getFunction()->dump();
   // errs() << "Analyzing scope of \n";
-  // call->dump();
 
   std::vector<CallBase *> result;
   unsigned int req_arg_pos = 6;
@@ -795,10 +795,13 @@ std::vector<CallBase *> get_corresponding_free(CallBase *call) {
   }
 
   // mpi finalize will end all communication nontheles
-  for (auto *user : mpi_func->mpi_finalize->users()) {
-    if (auto *finalize_call = dyn_cast<CallBase>(user)) {
-      assert(finalize_call->getCalledFunction() == mpi_func->mpi_finalize);
-      result.push_back(finalize_call);
+  // a well-Formed MPI programm will free the request before finalize
+  if (mpi_func->mpi_finalize) {
+    for (auto *user : mpi_func->mpi_finalize->users()) {
+      if (auto *finalize_call = dyn_cast<CallBase>(user)) {
+        assert(finalize_call->getCalledFunction() == mpi_func->mpi_finalize);
+        result.push_back(finalize_call);
+      }
     }
   }
 
