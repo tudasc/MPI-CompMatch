@@ -72,6 +72,9 @@ bool check_call_for_conflict(CallBase *mpi_call,
                              std::vector<CallBase *> scope_endings,
                              bool is_sending) {
 
+  // TODO if ANY_TAG or ANY_SOURCe is used: call conflicts with itself: no
+  // optimization possible!
+
   std::vector<std::pair<llvm::CallBase *, llvm::CallBase *>> conflicts;
 
   std::set<Instruction *> to_check;
