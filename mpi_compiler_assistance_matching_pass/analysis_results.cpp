@@ -22,17 +22,18 @@
 
 using namespace llvm;
 
-RequiredAnalysisResults::RequiredAnalysisResults(Pass *parent_pass) {
+RequiredAnalysisResults::RequiredAnalysisResults(Pass *parent_pass,
+                                                 llvm::Module &M) {
 
   assertion_checker_pass = parent_pass;
 
   assert(mpi_func != nullptr &&
          "The search for MPI functions should be made first");
 
-  // yust give it any function, the Function is not used at all
-  // dont know why the api has changed here...
+  // just give it any function (first of this Module), the Function is not used
+  // at all dont know why the api has changed here...
   TLI = &assertion_checker_pass->getAnalysis<TargetLibraryInfoWrapperPass>()
-             .getTLI(*mpi_func->mpi_init);
+             .getTLI(*M.begin());
 
   current_LI_function = nullptr;
   current_SE_function = nullptr;

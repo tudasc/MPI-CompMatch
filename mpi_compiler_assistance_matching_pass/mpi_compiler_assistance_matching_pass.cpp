@@ -59,7 +59,7 @@ using namespace llvm;
 RequiredAnalysisResults *analysis_results;
 
 struct mpi_functions *mpi_func;
-struct ImplementationSpecifics *mpi_implementation_specifics;
+ImplementationSpecifics *mpi_implementation_specifics;
 FunctionMetadata *function_metadata;
 
 namespace {
@@ -101,7 +101,7 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
       return false;
     }*/
 
-    analysis_results = new RequiredAnalysisResults(this);
+    analysis_results = new RequiredAnalysisResults(this, M);
 
     function_metadata = new FunctionMetadata(analysis_results->getTLI(), M);
 
