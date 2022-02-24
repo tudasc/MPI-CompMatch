@@ -20,9 +20,9 @@
 // count is not part of the message envelope
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-#define STATISTIC_PRINTING
+//#define STATISTIC_PRINTING
 
-//end config
+// end config
 
 #define RECV_REQUEST_TYPE 1
 #define SEND_REQUEST_TYPE 2
@@ -62,7 +62,6 @@ struct mpiopt_request {
 };
 typedef struct mpiopt_request MPIOPT_Request;
 
-
 MPI_Win global_comm_win;
 int dummy_int = 0;
 
@@ -95,7 +94,6 @@ static void wait_for_completion_blocking(void *request) {
   } while (status == UCS_INPROGRESS);
   ucp_request_free(request);
 }
-
 
 static void acknowlege_Request_free(MPIOPT_Request *request) {
   // wait for any outstanding RDMA Operation (i.e. transfer of flag that comm
