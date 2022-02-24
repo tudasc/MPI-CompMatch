@@ -6,6 +6,6 @@
 
 #include "low_level.h"
 
-#include "low-level.c"
+#include "one-sided-persistent.c"
 
 #endif /* OPT_IMPL_H */
