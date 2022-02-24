@@ -93,11 +93,13 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
     // Debug(M.dump(););
 
     mpi_func = get_used_mpi_functions(M);
-    if (!is_mpi_used(mpi_func)) {
+    // TODO is_mpi_used only checks for MPI init, but we want to use this on
+    // apps with muliple translation units
+    /*if (!is_mpi_used(mpi_func)) {
       // nothing to do for non mpi applicatiopns
       delete mpi_func;
       return false;
-    }
+    }*/
 
     analysis_results = new RequiredAnalysisResults(this);
 
@@ -145,10 +147,12 @@ struct MPICompilerAssistanceMatchingPass : public ModulePass {
       errs() << "Replace " << send_init_list.size() << " send Operations \nand "
              << recv_init_list.size() << " receive Operations\n";
 
-      add_init(M);
-      add_finalize(M);
       replace_communication_calls(send_init_list, recv_init_list);
     }
+
+    // Beware with operator | the functions will be executed with || they wont
+    replacement = replacement | add_init(M);
+    replacement = replacement | add_finalize(M);
 
     errs() << "Successfully executed the pass\n\n";
     delete mpi_func;

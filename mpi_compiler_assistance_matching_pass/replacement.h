@@ -21,8 +21,9 @@
 
 #include <vector>
 
-void add_init(llvm::Module &M);
-void add_finalize(llvm::Module &M);
+// true if something changed
+bool add_init(llvm::Module &M);
+bool add_finalize(llvm::Module &M);
 
 void replace_communication_calls(std::vector<llvm::CallBase *> init_send_calls,
                                  std::vector<llvm::CallBase *> init_recv_calls);
