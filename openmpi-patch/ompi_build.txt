@@ -1,0 +1,17 @@
+# Info on building OpenMPi with our patch:,
+
+cp /home/tim/cluster/mpi-comp-match/openmpi-patch/one-sided-persistent.c /home/tj75qeje/openmpi-4.1.1/ompi/mca/osc/ucx/one-sided-persistent.c
+
+include definitions from header low-level.h in ompi/include/mpi.h
+
+patch makefile.in:
+add line 1746
+add in line 452
+
+
+configure:
+
+CC=clang CXX=clang++ CFLAGS="-g -Og -fno-eliminate-unused-debug-symbols" LDFLAGS="-g" CXX_FLAGS="-g -Og -fno-eliminate-unused-debug-symbols" ./configure --prefix=/home/tj75qeje/modules/software/openmpi/4.1.1/ --enable-debug --disable-dependency-tracking --enable-mpi-cxx --enable-cxx-exceptions --enable-heterogeneous --enable-mpi1-compatibility --enable-static --with-hwloc=${HWLOC_ROOT} --with-slurm=/opt/slurm/current --with-pmi=/opt/slurm/current --with-ucx --enable-mca-no-build=btl-uct --enable-mpi-fortran=no
+
+make -j && make install
+
