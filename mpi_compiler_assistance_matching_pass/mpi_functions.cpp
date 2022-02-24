@@ -144,35 +144,37 @@ struct mpi_functions *get_used_mpi_functions(llvm::Module &M) {
   // used:
 
   if (result->mpi_wait) {
-    result->optimized.mpi_wait = cast<Function>(
-        M.getOrInsertFunction("MPIOPT_Wait", result->mpi_wait->getType())
-            .getCallee()
-            ->stripPointerCasts());
+    result->optimized.mpi_wait =
+        cast<Function>(M.getOrInsertFunction(
+                            "MPIOPT_Wait", result->mpi_wait->getFunctionType())
+                           .getCallee()
+                           ->stripPointerCasts());
   }
   if (result->mpi_start) {
     result->optimized.mpi_start = cast<Function>(
-        M.getOrInsertFunction("MPIOPT_Start", result->mpi_start->getType())
+        M.getOrInsertFunction("MPIOPT_Start",
+                              result->mpi_start->getFunctionType())
             .getCallee()
             ->stripPointerCasts());
   }
   if (result->mpi_send_init) {
-    result->optimized.mpi_send_init =
-        cast<Function>(M.getOrInsertFunction("MPIOPT_Send_init",
-                                             result->mpi_send_init->getType())
-                           .getCallee()
-                           ->stripPointerCasts());
+    result->optimized.mpi_send_init = cast<Function>(
+        M.getOrInsertFunction("MPIOPT_Send_init",
+                              result->mpi_send_init->getFunctionType())
+            .getCallee()
+            ->stripPointerCasts());
   }
   if (result->mpi_recv_init) {
-    result->optimized.mpi_recv_init =
-        cast<Function>(M.getOrInsertFunction("MPIOPT_Recv_init",
-                                             result->mpi_recv_init->getType())
-                           .getCallee()
-                           ->stripPointerCasts());
+    result->optimized.mpi_recv_init = cast<Function>(
+        M.getOrInsertFunction("MPIOPT_Recv_init",
+                              result->mpi_recv_init->getFunctionType())
+            .getCallee()
+            ->stripPointerCasts());
   }
   if (result->mpi_request_free) {
     result->optimized.mpi_request_free = cast<Function>(
         M.getOrInsertFunction("MPIOPT_Request_free",
-                              result->mpi_request_free->getType())
+                              result->mpi_request_free->getFunctionType())
             .getCallee()
             ->stripPointerCasts());
   }
