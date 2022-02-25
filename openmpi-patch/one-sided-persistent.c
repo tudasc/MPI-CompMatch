@@ -71,6 +71,16 @@ void empty_function(void *request, ucs_status_t status) {
   // callback if flush is completed
 }
 
+// linked list of all requests that we have, so that we can progress them in
+// case we get stuck
+struct list_elem {
+  MPIOPT_Request *elem;
+  struct list_elem *next;
+};
+struct list_elem *request_list_head;
+
+static void b_send(MPIOPT_Request *request);
+static void b_recv(MPIOPT_Request *request);
 static void receive_rdma_info(MPIOPT_Request *request);
 static int MPIOPT_Start_internal(MPIOPT_Request *request);
 static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status);
@@ -83,6 +93,149 @@ static int MPIOPT_Recv_init_internal(void *buf, int count,
                                      MPI_Datatype datatype, int source, int tag,
                                      MPI_Comm comm, MPIOPT_Request *request);
 static int MPIOPT_Request_free_internal(MPIOPT_Request *request);
+
+// add it at beginning of list
+static void add_request_to_list(MPIOPT_Request *request) {
+  struct list_elem *new_elem = malloc(sizeof(struct list_elem));
+  new_elem->elem = request;
+  new_elem->next = request_list_head->next;
+  request_list_head->next = new_elem;
+}
+
+static void remove_request_from_list(MPIOPT_Request *request) {
+  struct list_elem *previous_elem = request_list_head;
+  struct list_elem *current_elem = request_list_head->next;
+  assert(current_elem != NULL);
+  while (current_elem->elem != request) {
+    previous_elem = current_elem;
+    current_elem = previous_elem->next;
+    assert(current_elem != NULL);
+  }
+  // remove elem from list
+  previous_elem->next = current_elem->next;
+  free(current_elem);
+}
+
+static void progress_recv_request(MPIOPT_Request *request) {
+  // check if we actually need to do something
+  // code is shared with b_send
+  if (request->flag == request->operation_number * 2 + 1) {
+    // only then the sender is ready, but the recv not started yet
+    request->flag++; // recv is done at our side
+    // no possibility of data race, WE will advance the comm
+    assert(request->flag == request->operation_number * 2 + 2);
+
+#ifdef STATISTIC_PRINTING
+    printf("recv fetches data\n");
+#endif
+    ucs_status_t status =
+        ucp_get_nbi(request->ep, (void *)request->buf, request->size,
+                    request->remote_data_addr, request->remote_data_rkey);
+
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
+    /*
+     if (status != UCS_OK && status != UCS_INPROGRESS) {
+     printf("ERROR in RDMA GET\n");
+     }*/
+    // ensure order:
+    status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
+
+    request->flag_buffer = request->operation_number * 2 + 2;
+    status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
+                         request->remote_flag_addr, request->remote_flag_rkey);
+    assert(status == UCS_OK || status == UCS_INPROGRESS);
+
+    request->ucx_request_data_transfer =
+        ucp_ep_flush_nb(request->ep, 0, empty_function);
+  }
+  // and progress all communication regardless if we need to initiate something
+  ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+}
+
+static void progress_send_request_waiting_for_rdma(MPIOPT_Request *request) {
+  int flag;
+  int tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
+  MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+             MPI_STATUS_IGNORE);
+
+  if (flag) {
+    // found matching counterpart
+    receive_rdma_info(request);
+    request->type = SEND_REQUEST_TYPE;
+    if (request->backup_request != MPI_REQUEST_NULL) {
+      // cancel outstanding backup request
+      MPI_Cancel(
+          &request->backup_request); // we have issued this operation before
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+    }
+
+    b_send(request); // start RDMA
+    // starting RDMA is safe, even if the request is currently inactive, in this
+    // case we will tell this info to the receiver (not that the receiver cares
+    // about this info, but this way we dont have to check any conditions)
+  }
+}
+
+static void progress_recv_request_waiting_for_rdma(MPIOPT_Request *request) {
+  int flag;
+  int tag_to_use = COMM_BEGIN_TAG + request->tag;
+  MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
+             MPI_STATUS_IGNORE);
+  if (flag) {
+    // found matching counterpart
+    receive_rdma_info(request);
+    request->type = RECV_REQUEST_TYPE;
+    if (request->backup_request != MPI_REQUEST_NULL) {
+      // cancel outstanding backup request
+      MPI_Cancel(
+          &request->backup_request); // we have issued this operation before
+      MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+    }
+
+    b_recv(request); // start RDMA
+    // starting RDMA is safe, even if the request is currently inactive, in this
+    // case we will tell this info to the sender (not that the sender cares
+    // about this info, but this way we dont have to check any conditions)
+  }
+}
+
+static void progress_request(MPIOPT_Request *request) {
+  if (request->type == SEND_REQUEST_TYPE) {
+    // nothing to do: the receive requests will be responsible for progress
+  } else if (request->type == RECV_REQUEST_TYPE) {
+    progress_recv_request(request);
+  } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    progress_send_request_waiting_for_rdma(request);
+  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    progress_recv_request_waiting_for_rdma(request);
+  } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
+    int flag;
+    // progress the fallback communication
+    MPI_Test(&request->backup_request, &flag, MPI_STATUSES_IGNORE);
+  } else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
+    int flag;
+    // progress the fallback communication
+    MPI_Test(&request->backup_request, &flag, MPI_STATUSES_IGNORE);
+  } else {
+    assert(false && "Error: uninitialized Request");
+  }
+}
+
+// call if one get stuck while waiting for a request to complete: progresses all
+// other requests
+static void progress_other_requests(MPIOPT_Request *current_request) {
+  struct list_elem *current_elem = request_list_head->next;
+
+  while (current_elem != NULL) {
+    // we are stuck on this request, and should progress the others
+    // after we return, the control flow goes back to this request anyway
+    if (current_elem->elem != current_request) {
+      progress_request(current_elem->elem);
+    }
+    current_elem = current_elem->next;
+  }
+}
 
 static void wait_for_completion_blocking(void *request) {
   assert(request != NULL);
@@ -143,6 +296,7 @@ static void b_send(MPIOPT_Request *request) {
 #ifdef STATISTIC_PRINTING
     printf("send pushes data\n");
 #endif
+    request->flag_buffer = request->operation_number * 2 + 2;
     ucs_status_t status =
         ucp_put_nbi(request->ep, request->buf, request->size,
                     request->remote_data_addr, request->remote_data_rkey);
@@ -182,6 +336,8 @@ static void e_send_with_comm_abort_test(MPIOPT_Request *request) {
 
     MPI_Iprobe(request->dest, COMM_BEGIN_TAG + request->tag, request->comm,
                &flag_comm_abort, MPI_STATUS_IGNORE);
+
+    progress_other_requests(request);
   }
 
   if (__builtin_expect(flag_comm_abort, 0)) {
@@ -292,6 +448,7 @@ static void e_recv_with_comm_abort_test(MPIOPT_Request *request) {
 
     MPI_Iprobe(request->dest, COMM_BEGIN_TAG + request->tag, request->comm,
                &flag_comm_abort, MPI_STATUS_IGNORE);
+    progress_other_requests(request);
   }
 
   if (__builtin_expect(flag_comm_abort, 0)) {
@@ -498,7 +655,6 @@ static void receive_rdma_info(MPIOPT_Request *request) {
 #endif
 }
 
-// TODO
 static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 
   int flag;
@@ -508,7 +664,7 @@ static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 
   if (flag) {
     // found matching counterpart
-    // exchange_rdma_info(request);
+    receive_rdma_info(request);
     request->type = SEND_REQUEST_TYPE;
     b_send(request); // start RDMA
   } else {
@@ -526,7 +682,7 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
              MPI_STATUS_IGNORE);
   if (flag) {
     // found matching counterpart
-    // exchange_rdma_info(request);
+    receive_rdma_info(request);
     request->type = RECV_REQUEST_TYPE;
     b_recv(request); // start RDMA
   } else {
@@ -703,6 +859,8 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
     }
   }
 
+  add_request_to_list(request);
+
   return MPI_SUCCESS;
 }
 
@@ -728,6 +886,7 @@ static int MPIOPT_Send_init_internal(void *buf, int count,
 // leftover ressources at the end?
 static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
+  remove_request_from_list(request);
   // cancel any search for RDMA connection, if necessary
   int flag;
   MPI_Test(&request->rdma_exchange_request_send, &flag, MPI_STATUS_IGNORE);
@@ -765,8 +924,15 @@ void MPIOPT_INIT() {
   // TODO maybe we need less initializatzion to initioaize the RDMA component?
   MPI_Win_create(&dummy_int, sizeof(int), 1, MPI_INFO_NULL, MPI_COMM_WORLD,
                  &global_comm_win);
+  request_list_head = malloc(sizeof(struct list_elem));
+  request_list_head->elem = NULL;
+  request_list_head->next = NULL;
 }
-void MPIOPT_FINALIZE() { MPI_Win_free(&global_comm_win); }
+void MPIOPT_FINALIZE() {
+  MPI_Win_free(&global_comm_win);
+  assert(request_list_head->next == NULL); // list should be empty
+  free(request_list_head);
+}
 
 int MPIOPT_Start(MPI_Request *request) {
   return MPIOPT_Start_internal((MPIOPT_Request *)*request);
