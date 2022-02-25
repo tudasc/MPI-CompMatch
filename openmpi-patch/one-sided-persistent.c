@@ -764,13 +764,11 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
       // as msg order is defined
       assert(request->backup_request == MPI_REQUEST_NULL);
       // post the matching recv
-      printf("Post RECV, Fallback in start\n");
       MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
                 request->tag, request->comm, &request->backup_request);
     }
   } else {
     // RDMA handshake complete, we can post the matching recv
-    printf("Post RECV, handshake complete in start\n");
     assert(request->backup_request == MPI_REQUEST_NULL);
     MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
               request->tag, request->comm, &request->backup_request);
