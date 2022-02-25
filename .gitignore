@@ -5,6 +5,20 @@ build/*
 
 #executable
 example
+a.out
+IMB-ASYNC/src_cpp/IMB-ASYNC
+IMB-ASYNC/IMB-ASYNC
+IMB-ASYNC/IMB-ASYNC_orig
+
+IMB-ASYNC/src_cpp/ASYNC/thirdparty
+
+# output from job runs
+job.err
+job.out
+IMB-ASYNC/err/
+IMB-ASYNC/output/
+
+
 #IDE specific
 .project
 .cproject
