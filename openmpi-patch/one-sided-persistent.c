@@ -209,6 +209,18 @@ static void progress_request_waiting_for_rdma(MPIOPT_Request *request) {
       receive_rdma_info(request);
     }
   }
+
+  // an active receive request that has an rdma connection can post the
+  // matching receive, if not done already
+  if (request->remote_data_addr != NULL &&
+      request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION &&
+      request->backup_request == MPI_REQUEST_NULL &&
+      request->operation_number == 1) {
+    // post the matching recv
+    assert(request->backup_request == MPI_REQUEST_NULL);
+    MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
+  }
 }
 
 static void progress_request(MPIOPT_Request *request) {
@@ -740,7 +752,7 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
 
   progress_request_waiting_for_rdma(request);
 
-  // meaning no RDMA connsection is presnt
+  // meaning no RDMA connection is presnt
   if (request->remote_data_addr == NULL) {
 
     int flag;
@@ -752,12 +764,16 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
       // as msg order is defined
       assert(request->backup_request == MPI_REQUEST_NULL);
       // post the matching recv
+      printf("Post RECV, Fallback in start\n");
       MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
                 request->tag, request->comm, &request->backup_request);
     }
-
-    // DO NOT POST recv yet, post it at wait (which is legal according to mpi
-    // standard nothin has to happen before wait)
+  } else {
+    // RDMA handshake complete, we can post the matching recv
+    printf("Post RECV, handshake complete in start\n");
+    assert(request->backup_request == MPI_REQUEST_NULL);
+    MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
   }
 
   // ordering guarantees, that the probe for matching msg will return true
@@ -832,7 +848,7 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 
   int flag = 0;
 
-  while (!flag) {
+  while (request->remote_data_addr == NULL && !flag) {
     // at some time the payload msg will arrive
     MPI_Iprobe(request->dest, request->tag, request->comm, &flag,
                MPI_STATUS_IGNORE);
@@ -841,28 +857,30 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
     // then we test if the matching msg also have arrived
   }
 
+  if (request->backup_request == MPI_REQUEST_NULL) {
+    // post the matching recv if needed
+    MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
+              request->tag, request->comm, &request->backup_request);
+  }
+
   if (request->remote_data_addr == NULL) {
     // if it has not arrived: it will never arrive
     // it is not possible, that the matching msg arrives after the palyoad msg
-    if (request->backup_request != MPI_REQUEST_NULL) {
-      // post the matching recv if needed
-      MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
-                request->tag, request->comm, &request->backup_request);
-    }
+
     request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
-    MPI_Wait(&request->backup_request, MPI_STATUS_IGNORE);
 #ifdef STATISTIC_PRINTING
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     printf("Rank %d: SEND: No RDMA connection, use normal MPI\n", rank);
 #endif
-
   } else {
-
     request->type = RECV_REQUEST_TYPE;
-    // finally: post the matching recv for this first comm
-    MPI_Recv(request->buf, request->size, MPI_BYTE, request->dest, request->tag,
-             request->comm, MPI_STATUS_IGNORE);
+  }
+
+  flag = 0;
+  while (!flag) {
+    MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+    progress_other_requests(request);
   }
 
   // end while, either backup comm finished, or RDMA connection was}
