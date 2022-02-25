@@ -19,8 +19,6 @@
 // count is not part of the message envelope
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-#define CONNECTION_CREATE_WAIT_THRESHOLD 32
-
 #define STATISTIC_PRINTING
 
 // end config
@@ -196,8 +194,14 @@ static void progress_recv_request(MPIOPT_Request *request) {
 static void progress_request_waiting_for_rdma(MPIOPT_Request *request) {
 
   if (request->remote_data_addr == NULL) {
-    int flag;
+
     int tag_to_use = COMM_BEGIN_TAG + request->tag;
+    if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+      tag_to_use = COMM_BEGIN_TAG + COMM_BEGIN_TAG + request->tag;
+    }
+
+    int flag;
+
     MPI_Iprobe(request->dest, tag_to_use, request->comm, &flag,
                MPI_STATUS_IGNORE);
     if (flag) {
@@ -646,6 +650,7 @@ static void receive_rdma_info(MPIOPT_Request *request) {
   assert(request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION ||
          request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
 
+#ifdef STATISTIC_PRINTING
   int drank = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &drank);
   if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
@@ -653,6 +658,7 @@ static void receive_rdma_info(MPIOPT_Request *request) {
   } else {
     printf("Rank %d: RECV: TRY RDMA established \n", drank);
   }
+#endif
 
   int tag_to_use = COMM_BEGIN_TAG + request->tag;
   if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
@@ -813,7 +819,7 @@ static void wait_send_when_searching_for_connection(MPIOPT_Request *request) {
 #ifdef STATISTIC_PRINTING
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    printf("Rank %d: SEND: No RDmA connection, use normal MPI\n", rank);
+    printf("Rank %d: SEND: No RDMA connection, use normal MPI\n", rank);
 #endif
   }
 
@@ -947,6 +953,11 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 static int MPIOPT_Recv_init_internal(void *buf, int count,
                                      MPI_Datatype datatype, int source, int tag,
                                      MPI_Comm comm, MPIOPT_Request *request) {
+#ifdef STATISTIC_PRINTING
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  printf("Rank %d: Init RECV from %d\n", rank, source);
+#endif
 
   memset(request, 0, sizeof(MPIOPT_Request));
   request->type = RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
@@ -956,7 +967,11 @@ static int MPIOPT_Recv_init_internal(void *buf, int count,
 static int MPIOPT_Send_init_internal(void *buf, int count,
                                      MPI_Datatype datatype, int source, int tag,
                                      MPI_Comm comm, MPIOPT_Request *request) {
-
+#ifdef STATISTIC_PRINTING
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  printf("Rank %d: Init SEND to %d\n", rank, source);
+#endif
   memset(request, 0, sizeof(MPIOPT_Request));
   request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
   return init_request(buf, count, datatype, source, tag, comm, request);

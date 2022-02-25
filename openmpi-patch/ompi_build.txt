@@ -1,6 +1,6 @@
 # Info on building OpenMPi with our patch:,
 
-cp /home/tim/cluster/mpi-comp-match/openmpi-patch/one-sided-persistent.c /home/tj75qeje/openmpi-4.1.1/ompi/mca/osc/ucx/one-sided-persistent.c
+cp /home/tj75qeje/mpi-comp-match/openmpi-patch/one-sided-persistent.c /home/tj75qeje/openmpi-4.1.1/ompi/mca/osc/ucx/one-sided-persistent.c
 
 include definitions from header low-level.h in ompi/include/mpi.h.in
 
