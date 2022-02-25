@@ -781,31 +781,55 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
 }
 
 // TODO return proper error codes
-static int MPIOPT_Start_internal(MPIOPT_Request *request) {
+
+static int MPIOPT_Start_send_internal(MPIOPT_Request *request) {
 
   // TODO atomic increment for multi threading
   request->operation_number++;
 
-  // TODO switch ?
-
-  if (request->type == SEND_REQUEST_TYPE) {
+  if (__builtin_expect(request->type == SEND_REQUEST_TYPE, 1)) {
     b_send(request);
-  } else if (request->type == RECV_REQUEST_TYPE) {
-    b_recv(request);
+
   } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
     start_send_when_searching_for_connection(request);
-  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    start_recv_when_searching_for_connection(request);
   } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
     assert(request->backup_request == MPI_REQUEST_NULL);
     MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
               request->tag, request->comm, &request->backup_request);
+
+  } else {
+    assert(false && "Error: uninitialized Request");
+  }
+}
+
+static int MPIOPT_Start_recv_internal(MPIOPT_Request *request) {
+
+  // TODO atomic increment for multi threading
+  request->operation_number++;
+
+  if (__builtin_expect(request->type == RECV_REQUEST_TYPE, 1)) {
+    b_recv(request);
+
+  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    start_recv_when_searching_for_connection(request);
+
   } else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
     assert(request->backup_request == MPI_REQUEST_NULL);
     MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
               request->tag, request->comm, &request->backup_request);
   } else {
     assert(false && "Error: uninitialized Request");
+  }
+}
+
+static int MPIOPT_Start_internal(MPIOPT_Request *request) {
+
+  if (request->type == SEND_REQUEST_TYPE ||
+      request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION ||
+      request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
+    return MPIOPT_Start_send_internal(request);
+  } else {
+    return MPIOPT_Start_recv_internal(request);
   }
 }
 
@@ -887,27 +911,52 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
   assert(request->type != RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
 }
 
+static int MPIOPT_Wait_send_internal(MPIOPT_Request *request,
+                                     MPI_Status *status) {
+
+  // TODO implement MPI status?
+  assert(status == MPI_STATUS_IGNORE);
+
+  if (__builtin_expect(request->type == SEND_REQUEST_TYPE, 1)) {
+    e_send(request);
+  } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    wait_send_when_searching_for_connection(request);
+  } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
+    MPI_Wait(&request->backup_request, status);
+  } else {
+    assert(false && "Error: uninitialized Request");
+  }
+}
+
+static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
+                                     MPI_Status *status) {
+
+  // TODO implement MPI status?
+  assert(status == MPI_STATUS_IGNORE);
+
+  if (__builtin_expect(request->type == RECV_REQUEST_TYPE, 1)) {
+    e_recv(request);
+  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    wait_recv_when_searching_for_connection(request);
+  } else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
+
+    MPI_Wait(&request->backup_request, status);
+  } else {
+    assert(false && "Error: uninitialized Request");
+  }
+}
+
 static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
 
   // TODO implement MPI status?
   assert(status == MPI_STATUS_IGNORE);
 
-  // TODO switch ?
-
-  if (request->type == SEND_REQUEST_TYPE) {
-    e_send(request);
-  } else if (request->type == RECV_REQUEST_TYPE) {
-    e_recv(request);
-  } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    wait_send_when_searching_for_connection(request);
-  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-    wait_recv_when_searching_for_connection(request);
-  } else if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK ||
-             request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
-
-    MPI_Wait(&request->backup_request, status);
+  if (request->type == SEND_REQUEST_TYPE ||
+      request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION ||
+      request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
+    return MPIOPT_Wait_send_internal(request, status);
   } else {
-    assert(false && "Error: uninitialized Request");
+    return MPIOPT_Wait_recv_internal(request, status);
   }
 }
 
