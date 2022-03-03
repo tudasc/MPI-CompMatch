@@ -20,7 +20,7 @@
 /*  main                                                                    */
 /* ************************************************************************ */
 
-#define DUMMY_WLOAD_TIME 10
+#define DUMMY_WLOAD_TIME 7
 
 //#define STATISTIC_PRINTING
 
@@ -33,7 +33,8 @@
 
 // 10KB
 #define BUFFER_SIZE 10000
-#define NUM_ITERS 100000
+//#define NUM_ITERS 100000
+#define NUM_ITERS 25000
 
 //#define BUFFER_SIZE 10
 //#define NUM_ITERS 3
@@ -68,7 +69,7 @@ void check_buffer_content(int *buf, int n) {
 #define tag_rkey_flag 44
 
 void use_persistent_comm() {
-
+MPIOPT_INIT();
   int rank, numtasks;
   // Welchen rang habe ich?
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -82,56 +83,40 @@ void use_persistent_comm() {
   MPI_Request req_s;
   MPI_Request req_r;
 
+  int peer=1;
   if (rank == 1) {
+	  peer=0;}
 
-    MPI_Send_init(buffer_s, sizeof(int) * N, MPI_BYTE, 0, 42, MPI_COMM_WORLD,
+    MPIOPT_Send_init(buffer_s, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
                   &req_s);
-    MPI_Recv_init(buffer_r, sizeof(int) * N, MPI_BYTE, 0, 42, MPI_COMM_WORLD,
+    MPIOPT_Recv_init(buffer_r, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
                       &req_r);
 
     for (int n = 0; n < NUM_ITERS; ++n) {
       for (int i = 0; i < N; ++i) {
     	  buffer_s[i] = rank * i * n;
       }
-      MPI_Start(&req_r);
-      MPI_Start(&req_s);
+      //MPI_Start(&req_r);
+      //MPI_Start(&req_s);
+      MPIOPT_Start_send(&req_s);
+	  MPIOPT_Start_recv(&req_r);
+
       dummy_workload(work_buffer);
-      MPI_Wait(&req_r, MPI_STATUS_IGNORE);
-      MPI_Wait(&req_s, MPI_STATUS_IGNORE);
-    }
-  } else {
 
-	    MPI_Send_init(buffer_s, sizeof(int) * N, MPI_BYTE, 1, 42, MPI_COMM_WORLD,
-	                  &req_s);
-	    MPI_Recv_init(buffer_r, sizeof(int) * N, MPI_BYTE, 1, 42, MPI_COMM_WORLD,
-	                      &req_r);
-    for (int n = 0; n < NUM_ITERS; ++n) {
+      //MPI_Wait(&req_s, MPI_STATUS_IGNORE);
+      //MPI_Wait(&req_r, MPI_STATUS_IGNORE);
+      MPIOPT_Wait_send(&req_s, MPI_STATUS_IGNORE);
+      MPIOPT_Wait_recv(&req_r, MPI_STATUS_IGNORE);
 
-      for (int i = 0; i < N; ++i) {
-    	  buffer_s[i] = rank * i * n;
-      }
-
-      MPI_Start(&req_r);
-      MPI_Start(&req_s);
-      dummy_workload(work_buffer);
-      MPI_Wait(&req_r, MPI_STATUS_IGNORE);
-      MPI_Wait(&req_s, MPI_STATUS_IGNORE);
 #ifdef STATISTIC_PRINTING
       check_buffer_content(buffer_r, n);
 #endif
+
     }
 
-    // after comm
-    /*
-     for (int i = 0; i < N; ++i) {
-     printf("%i,", buffer[i]);
-     }
-     printf("\n");
-     */
-  }
-
-  MPI_Request_free(&req_r);
-  MPI_Request_free(&req_s);
+  MPIOPT_Request_free(&req_r);
+  MPIOPT_Request_free(&req_s);
+  MPIOPT_FINALIZE();
 }
 
 void use_standard_comm() {
@@ -180,8 +165,11 @@ void use_standard_comm() {
      printf("\n");
      */
   }
+
 }
 
+//TODO use Reduce to only report max time
+// only use persistent and compare transformed VS non-transormed for fair comparision
 int main(int argc, char **argv) {
 
   struct timeval start_time; /* time when program started */
