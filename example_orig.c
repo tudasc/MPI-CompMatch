@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <sys/time.h>
 
 #include <execinfo.h>
 
@@ -122,8 +122,8 @@ int main(int argc, char **argv) {
 	  MPI_Init(&argc, &argv);
 
 
-  struct timespec start_time; /* time when program started */
-  struct timespec stop_time; /* time when calculation completed                */
+  struct timeval start_time; /* time when program started */
+  struct timeval stop_time; /* time when calculation completed                */
 
   int rank;
   // Welchen rang habe ich?
@@ -132,41 +132,21 @@ int main(int argc, char **argv) {
 
  
   MPI_Barrier(MPI_COMM_WORLD);
-  clock_gettime(CLOCK_MONOTONIC,&start_time); /*  start timer         */
+  gettimeofday(&start_time, NULL); /*  start timer         */
   use_persistent_comm();
-  clock_gettime(CLOCK_MONOTONIC,&stop_time); /*  stop timer          */
+  gettimeofday(&stop_time, NULL); /*  stop timer          */
   MPI_Barrier(MPI_COMM_WORLD);
-
-  double time_with_comm = (stop_time.tv_sec - start_time.tv_sec) +
-         (stop_time.tv_nsec - start_time.tv_nsec) * 1e-9;
-  double *work_buffer = (double*) malloc(N * sizeof(double));
-  MPI_Barrier(MPI_COMM_WORLD);
-  clock_gettime(CLOCK_MONOTONIC,&start_time); /*  start timer         */
-    for (int i = 0; i < NUM_ITERS; ++i) {
-    	dummy_workload(work_buffer);
-	}
-    clock_gettime(CLOCK_MONOTONIC,&stop_time); /*  stop timer          */
-    MPI_Barrier(MPI_COMM_WORLD);
-    free(work_buffer);
-    double calc_only_time = (stop_time.tv_sec - start_time.tv_sec) +
-           (stop_time.tv_nsec - start_time.tv_nsec) * 1e-9;
+  double time = (stop_time.tv_sec - start_time.tv_sec) +
+         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 
   double max_time =0.0;
-  MPI_Reduce(&time_with_comm, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&time, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
   if(rank==0){
-	  printf("Bufsize:    %d B \n", BUFFER_SIZE);
+	  printf("Bufsize:    %lu B \n", BUFFER_SIZE);
 	  printf("repetitions:    %d \n", NUM_ITERS);
-
   printf("Total Time:    %f s \n", max_time);
-  printf("Computation Time:    %f s \n", calc_only_time);
-  printf("Overhead:    %f s \n", max_time-calc_only_time);
   }
-
-  struct timespec resulution;
-  clock_getres(CLOCK_MONOTONIC,&resulution);
-  printf("Timer Resolution:    %f s \n", resulution.tv_sec+ resulution.tv_nsec * 1e-9);
-
 
   MPI_Finalize();
   return 0;
