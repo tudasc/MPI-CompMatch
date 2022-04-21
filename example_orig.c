@@ -66,7 +66,7 @@ void check_buffer_content(int *buf, int n) {
 #define tag_rkey_data 43
 #define tag_rkey_flag 44
 
-void use_persistent_comm() {
+double use_persistent_comm() {
   int rank, numtasks;
   // Welchen rang habe ich?
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -76,6 +76,14 @@ void use_persistent_comm() {
   int *buffer_s = malloc(N * sizeof(int));
   double *work_buffer = malloc(N * sizeof(double));
   work_buffer[N - 1] = 0.6;
+
+  struct timeval start_time; /* time when program started */
+  struct timeval stop_time; /* time when calculation completed                */
+
+  // start timer after allocation of the data-buffers
+
+  gettimeofday(&start_time, NULL); /*  start timer         */
+
 
   MPI_Request req_s;
   MPI_Request req_r;
@@ -111,8 +119,33 @@ void use_persistent_comm() {
 
   MPI_Request_free(&req_r);
   MPI_Request_free(&req_s);
+
+  gettimeofday(&stop_time, NULL); /*  stop timer          */
+  return (stop_time.tv_sec - start_time.tv_sec) +
+         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 }
 
+
+double without_comm() {
+
+  double *work_buffer = malloc(N * sizeof(double));
+  work_buffer[N - 1] = 0.6;
+
+  struct timeval start_time; /* time when program started */
+  struct timeval stop_time; /* time when calculation completed                */
+
+  // start timer after allocation of the data-buffers
+
+  gettimeofday(&start_time, NULL); /*  start timer         */
+
+    for (int n = 0; n < NUM_ITERS; ++n) {
+      dummy_workload(work_buffer);
+    }
+
+  gettimeofday(&stop_time, NULL); /*  stop timer          */
+  return (stop_time.tv_sec - start_time.tv_sec) +
+         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
+}
 
 
 //TODO use Reduce to only report max time
@@ -122,8 +155,7 @@ int main(int argc, char **argv) {
 	  MPI_Init(&argc, &argv);
 
 
-  struct timeval start_time; /* time when program started */
-  struct timeval stop_time; /* time when calculation completed                */
+
 
   int rank;
   // Welchen rang habe ich?
@@ -132,20 +164,25 @@ int main(int argc, char **argv) {
 
  
   MPI_Barrier(MPI_COMM_WORLD);
-  gettimeofday(&start_time, NULL); /*  start timer         */
-  use_persistent_comm();
-  gettimeofday(&stop_time, NULL); /*  stop timer          */
+
+  double time_with_comm = use_persistent_comm();
+
   MPI_Barrier(MPI_COMM_WORLD);
-  double time = (stop_time.tv_sec - start_time.tv_sec) +
-         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
+
+  double time_without_comm = use_persistent_comm();
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
 
   double max_time =0.0;
-  MPI_Reduce(&time, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&time_with_comm, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
   if(rank==0){
 	  printf("Bufsize:    %lu B \n", BUFFER_SIZE);
 	  printf("repetitions:    %d \n", NUM_ITERS);
   printf("Total Time:    %f s \n", max_time);
+  printf("Comp. Time:    %f s \n", time_without_comm);
+  printf("Overhead:    %f s \n", max_time-time_without_comm);
   }
 
   MPI_Finalize();
