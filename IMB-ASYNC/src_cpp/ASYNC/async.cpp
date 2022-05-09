@@ -451,7 +451,6 @@ namespace async_suite {
             MPI_Request request_s;
             MPI_Request request_r;
 
-
             calc.reqs = nullptr;
             calc.num_requests = 0;
             if (group % 2 == 0) {
@@ -460,6 +459,8 @@ namespace async_suite {
                 MPI_Send_init((char*)sbuf  , count, datatype, pair, tag, MPI_COMM_WORLD, &request_s);
                 MPI_Recv_init((char*)rbuf , count, datatype, pair, tag, MPI_COMM_WORLD, &request_r);
                 for (int i = 0; i < ncycles + nwarmup; i++) {
+
+
                     if (i == nwarmup) t1 = MPI_Wtime();
 MPI_Start(&request_s);
 MPI_Start(&request_r);
@@ -469,8 +470,8 @@ MPI_Start(&request_r);
                         total_tover_comm += local_tover_comm;
                         total_tover_calc += local_tover_calc;
                     }
-                    MPI_Wait(&request_s, MPI_STATUSES_IGNORE);
-                    MPI_Wait(&request_r, MPI_STATUSES_IGNORE);
+                    MPI_Wait(&request_s, MPI_STATUS_IGNORE);
+                    MPI_Wait(&request_r, MPI_STATUS_IGNORE);
 
 
                 }
