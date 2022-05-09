@@ -12,13 +12,14 @@
 # opne node per process
 
 ###SBATCH --array 0-1
-#SBATCH --array 0-11
+###SBATCH --array 0-11
 ###SBATCH --array 0-1
 
 #same as -j
-#SBATCH --job-name ucx_Testing
+#SBATCH --job-name MPI-ASYNC-BENCHMARK
 #same as -o
-#SBATCH --output output/job_%a.out
+##SBATCH --output output/job_%a.out
+#SBATCH --output job.out
 #same as -e
 #SBATCH --error err/job_%a.err
 
@@ -26,7 +27,7 @@
 
 srun hostname
 
-ml gcc openmpi/test hwloc/2.5.0 clang/11.1.0
+ml gcc/8.3.1 openmpi/test hwloc/2.5.0 clang/11.1.0
 
 #export OMPI_MCA_opal_warn_on_missing_libcuda=0
 #export OMPI_MCA_opal_common_ucx_opal_mem_hooks=1
@@ -37,13 +38,18 @@ export UCX_UNIFIED_MODE=y
 
 readarray -t PARAMS < /home/tj75qeje/mpi-comp-match/IMB-ASYNC/parameters.txt
 
-PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
+#PARAM=${PARAMS[$SLURM_ARRAY_TASK_ID]}
+PARAM=${PARAMS[0]}
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./src_cpp/ASYNC/thirdparty/lib/
 
 echo "Original $PARAM"
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./src_cpp/ASYNC/thirdparty/lib/ mpirun -n 2 ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 61 -workload calc -nwarmup 100 -thread_level single $PARAM
+srun ./IMB-ASYNC_orig calc_calibration
+srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -nwarmup 100 -thread_level single $PARAM
 
 echo "Compiler Assisted $PARAM"
-LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./src_cpp/ASYNC/thirdparty/lib/ mpirun -n 2 ./IMB-ASYNC async_persistentpt2pt -cper10usec 61 -workload calc -nwarmup 100 -thread_level single $PARAM
+srun ./IMB-ASYNC calc_calibration
+srun ./IMB-ASYNC async_persistentpt2pt -cper10usec 64 -workload calc -nwarmup 100 -thread_level single $PARAM
 
 echo "done"
 
