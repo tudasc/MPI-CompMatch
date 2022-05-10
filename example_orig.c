@@ -161,15 +161,13 @@ int main(int argc, char **argv) {
   // Welchen rang habe ich?
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+  MPI_Barrier(MPI_COMM_WORLD);
 
+  double time_without_comm = without_comm();
  
   MPI_Barrier(MPI_COMM_WORLD);
 
   double time_with_comm = use_persistent_comm();
-
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  double time_without_comm = use_persistent_comm();
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -183,6 +181,7 @@ int main(int argc, char **argv) {
   printf("Total Time:    %f s \n", max_time);
   printf("Comp. Time:    %f s \n", time_without_comm);
   printf("Overhead:    %f s \n", max_time-time_without_comm);
+  printf("MPI Timer Res:  %.7e s \n",MPI_Wtick());
   }
 
   MPI_Finalize();
