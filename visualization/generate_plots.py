@@ -95,12 +95,18 @@ def get_plot(data, scaling, name):
         # get the data
         x, y_min, y_max, y_avg = extract_data(data[ORIG],buf_size)
 
+        orig_avg_time=y_avg[-1]
+
         max_y = np.max(y_max)# axis scaling
 
         ax.plot(x, y_avg, label="original",color="blue")
         ax.fill_between(x,y_min,y_max,facecolor="blue",alpha=0.5)
 
         x, y_min, y_max, y_avg = extract_data(data[MODIFIED], buf_size)
+
+        modified_avg_time = y_avg[-1]
+
+        print("%d : Up to %f%% improvement (avg)" % (buf_size,100*(orig_avg_time-modified_avg_time)/orig_avg_time))
 
         ax.plot(x, y_avg, label="modified",color="orange")
         ax.fill_between(x,y_min,y_max,facecolor="orange",alpha=0.5)
