@@ -69,10 +69,10 @@ def extract_data(data, buf_size):
 
 
 def get_plot(data, scaling, name):
-    ftsize = 12
+    ftsize = 16
     plt.rcParams.update({'font.size': ftsize})
     # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
-    figsz = (12, 20)
+    figsz = (12, 12)
 
     ncols = math.ceil(len(buffer_sizes) * 1.0 / nrows)
 
