@@ -62,8 +62,14 @@ struct mpiopt_request {
 };
 typedef struct mpiopt_request MPIOPT_Request;
 
+struct list_elem_int{
+	int value;
+	struct list_elem_int* next;
+};
+
 MPI_Win global_comm_win;
 int dummy_int = 0;
+
 
 void empty_function(void *request, ucs_status_t status) {
   // callback if flush is completed
@@ -76,6 +82,11 @@ struct list_elem {
   struct list_elem *next;
 };
 struct list_elem *request_list_head;
+
+// requests to free (defer free of some ressources until finalize, so that request free is local operation)
+struct list_elem* to_free_list_head;
+// tell other rank, that it should post a matching receive for all unsuccessful handshakes
+struct list_elem_int* msg_send;
 
 static void acknowlege_Request_free(MPIOPT_Request *request);
 static void b_send(MPIOPT_Request *request);
@@ -318,11 +329,13 @@ static void acknowlege_Request_free(MPIOPT_Request *request) {
   // we need to be in the same msg as the other rank
   assert(request->flag_buffer == request->operation_number);
 
-  // release all RDMA ressources
-  ucp_context_h context = mca_osc_ucx_component.ucp_context;
+  // defered until finalize
 
-  ucp_mem_unmap(context, request->mem_handle_flag);
-  ucp_mem_unmap(context, request->mem_handle_data);
+  // release all RDMA ressources
+//  ucp_context_h context = mca_osc_ucx_component.ucp_context;
+
+//  ucp_mem_unmap(context, request->mem_handle_flag);
+//  ucp_mem_unmap(context, request->mem_handle_data);
 #ifdef STATISTIC_PRINTING
   printf("RDMA  connection closed\n");
 #endif
@@ -1064,6 +1077,14 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   // cancel any search for RDMA connection, if necessary
   // TODO tell the other process to post matching recv before finalize?
 
+  // defer until finalize
+
+  struct list_elem *new_elem = malloc(sizeof(struct list_elem));
+  new_elem->elem = request;
+  new_elem->next = to_free_list_head->next;
+  to_free_list_head->next = new_elem;
+
+  /*
   free(request->rdma_info_buf);
 
   if (request->type == RECV_REQUEST_TYPE ||
@@ -1074,7 +1095,7 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   }
 
   request->type = 0; // uninitialized
-
+*/
   return MPI_SUCCESS;
 }
 
@@ -1086,11 +1107,37 @@ void MPIOPT_INIT() {
   request_list_head = malloc(sizeof(struct list_elem));
   request_list_head->elem = NULL;
   request_list_head->next = NULL;
+  to_free_list_head = malloc(sizeof(struct list_elem));
+  request_list_head->elem = NULL;
+  request_list_head->next = NULL;
+
 }
 void MPIOPT_FINALIZE() {
   MPI_Win_free(&global_comm_win);
   assert(request_list_head->next == NULL); // list should be empty
   free(request_list_head);
+
+
+  list_elem* elem = to_free_list_head;
+  while (elem!=NULL){
+	   MPIOPT_Request* req = to_free_list_head->elem;
+
+	   if (req !=0){
+		   free(req->rdma_info_buf);
+		   // release all RDMA ressources
+		    ucp_context_h context = mca_osc_ucx_component.ucp_context;
+		    if (req->type == RECV_REQUEST_TYPE ||
+		        req->type == SEND_REQUEST_TYPE) {
+		      // otherwise all these ressources where never aquired
+		    ucp_mem_unmap(context, req->mem_handle_flag);
+		    ucp_mem_unmap(context, req->mem_handle_data);
+		    }
+		    free(req);
+	   }
+	   elem = elem->next;
+  }
+
+
 }
 
 int MPIOPT_Start(MPI_Request *request) {
@@ -1135,6 +1182,7 @@ int MPIOPT_Recv_init(void *buf, int count, MPI_Datatype datatype, int source,
 
 int MPIOPT_Request_free(MPI_Request *request) {
   int retval = MPIOPT_Request_free_internal((MPIOPT_Request *)*request);
-  free(*request);
+  *request=NULL;
+  //free(*request);
   return retval;
 }
