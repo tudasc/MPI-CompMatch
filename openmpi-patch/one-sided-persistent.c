@@ -92,7 +92,6 @@ struct list_elem *to_free_list_head;
 // handshakes
 struct list_elem_int *msg_send;
 
-static void acknowlege_Request_free(MPIOPT_Request *request);
 static void b_send(MPIOPT_Request *request);
 static void b_recv(MPIOPT_Request *request);
 static void receive_rdma_info(MPIOPT_Request *request);
@@ -128,41 +127,6 @@ static void remove_request_from_list(MPIOPT_Request *request) {
   // remove elem from list
   previous_elem->next = current_elem->next;
   free(current_elem);
-}
-
-// we need to progress other Tasks if we are stuck in request free
-static void progress_test_for_free(MPIOPT_Request *request) {
-
-  assert(false && "Decreparted");
-  assert(request->type == SEND_REQUEST_TYPE ||
-         request->type == RECV_REQUEST_TYPE);
-
-  int flag;
-  MPI_Iprobe(request->dest, request->tag, handshake_response_communicator,
-             &flag, MPI_STATUS_IGNORE);
-
-  if (flag) {
-    // other rank has freed the corresponding request
-    acknowlege_Request_free(request);
-    if (request->type == SEND_REQUEST_TYPE) {
-      request->type = SEND_REQUEST_TYPE_USE_FALLBACK;
-    } else {
-      request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
-    }
-
-    // check if we need to send the current msg via fallback:
-    if (request->flag < request->operation_number * 2 + 2) {
-      if (request->type == SEND_REQUEST_TYPE_USE_FALLBACK) {
-        assert(request->backup_request == MPI_REQUEST_NULL);
-        MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
-                  request->tag, request->comm, &request->backup_request);
-      } else {
-        assert(request->backup_request == MPI_REQUEST_NULL);
-        MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
-                  request->tag, request->comm, &request->backup_request);
-      }
-    }
-  }
 }
 
 static void progress_recv_request(MPIOPT_Request *request) {
@@ -282,55 +246,6 @@ static void wait_for_completion_blocking(void *request) {
   } while (status == UCS_INPROGRESS);
   ucp_request_free(request);
 }
-
-static void acknowlege_Request_free(MPIOPT_Request *request) {
-
-  assert(false && "decreparted");
-  // wait for any outstanding RDMA Operation (i.e. transfer of flag that comm
-  // is finished)
-  if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
-    wait_for_completion_blocking(request->ucx_request_flag_transfer);
-    request->ucx_request_flag_transfer = NULL;
-  }
-  if (__builtin_expect(request->ucx_request_flag_transfer != NULL, 0)) {
-    wait_for_completion_blocking(request->ucx_request_flag_transfer);
-    request->ucx_request_flag_transfer = NULL;
-  }
-
-  request->flag_buffer = -1;
-
-  MPI_Send(&request->operation_number, sizeof(int), MPI_BYTE, request->dest,
-           request->tag, handshake_response_communicator);
-
-  // receive the Msg that the communication will end
-  // BLOCKING, as we may only free RDMA ressources one we are shure that the
-  // oher rank has finised all rdma ops
-
-  int flag;
-  MPI_Request req;
-  MPI_Irecv(&request->flag_buffer, sizeof(int), MPI_BYTE, request->dest,
-            request->tag, handshake_response_communicator, &req);
-  MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-  while (!flag) {
-    progress_other_requests(request);
-    MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-  }
-
-  // we need to be in the same msg as the other rank
-  assert(request->flag_buffer == request->operation_number);
-
-  // defered until finalize
-
-  // release all RDMA ressources
-//  ucp_context_h context = mca_osc_ucx_component.ucp_context;
-
-//  ucp_mem_unmap(context, request->mem_handle_flag);
-//  ucp_mem_unmap(context, request->mem_handle_data);
-#ifdef STATISTIC_PRINTING
-  printf("RDMA  connection closed\n");
-#endif
-}
-
 // operation_number*2= op has not started on remote
 // operation_number*2 +1= op has started on remote, 	we should initiate data
 // transfer operation_number*2 + 2= op has finished on remote
@@ -374,34 +289,6 @@ static void b_send(MPIOPT_Request *request) {
   }
 }
 
-static void e_send_with_comm_abort_test(MPIOPT_Request *request) {
-  int flag_comm_abort = 0;
-
-  // busy wait
-  while (__builtin_expect(request->flag < request->operation_number * 2 + 2 &&
-                              !flag_comm_abort,
-                          0)) {
-
-    ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
-
-    MPI_Iprobe(request->dest, request->tag, handshake_response_communicator,
-               &flag_comm_abort, MPI_STATUS_IGNORE);
-
-    progress_other_requests(request);
-  }
-
-  if (__builtin_expect(flag_comm_abort, 0)) {
-    // other rank has freed the corresponding request
-    acknowlege_Request_free(request);
-    request->type = SEND_REQUEST_TYPE_USE_FALLBACK;
-    // check if we need to send the current msg via fallback:
-    if (request->flag < request->operation_number * 2 + 2) {
-      MPI_Send(request->buf, request->size, MPI_BYTE, request->dest,
-               request->tag, request->comm);
-    }
-  }
-}
-
 static void e_send(MPIOPT_Request *request) {
 
   // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
@@ -432,7 +319,8 @@ static void e_send(MPIOPT_Request *request) {
   if (__builtin_expect(request->flag < request->operation_number * 2 + 2, 0)) {
     // after some time: also test if the other rank has freed the request in
     // between
-    e_send_with_comm_abort_test(request);
+    // e_send_with_comm_abort_test(request);
+    // TODO one could implement this and use fallback option
   }
 }
 
@@ -486,33 +374,6 @@ static void b_recv(MPIOPT_Request *request) {
   }
 }
 
-static void e_recv_with_comm_abort_test(MPIOPT_Request *request) {
-  int flag_comm_abort = 0;
-
-  // busy wait
-  while (__builtin_expect(request->flag < request->operation_number * 2 + 1 &&
-                              !flag_comm_abort,
-                          0)) {
-
-    ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
-
-    MPI_Iprobe(request->dest, request->tag, handshake_response_communicator,
-               &flag_comm_abort, MPI_STATUS_IGNORE);
-    progress_other_requests(request);
-  }
-
-  if (__builtin_expect(flag_comm_abort, 0)) {
-    // other rank has freed the corresponding request
-    acknowlege_Request_free(request);
-    request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
-    // check if we need to send the current msg via fallback:
-    if (request->flag < request->operation_number * 2 + 2) {
-      MPI_Recv(request->buf, request->size, MPI_BYTE, request->dest,
-               request->tag, request->comm, MPI_STATUS_IGNORE);
-    }
-  }
-}
-
 static void e_recv(MPIOPT_Request *request) {
   // ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
@@ -536,7 +397,8 @@ static void e_recv(MPIOPT_Request *request) {
     ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
   }
 
-  e_recv_with_comm_abort_test(request);
+  // e_recv_with_comm_abort_test(request);
+  // TODO one could implement this and use fallback if necessary
 
   if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
 #ifdef STATISTIC_PRINTING
