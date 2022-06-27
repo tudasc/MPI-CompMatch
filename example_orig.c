@@ -74,7 +74,7 @@ double use_persistent_comm() {
   MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
   int *buffer_r = malloc(N * sizeof(int));
   int *buffer_s = malloc(N * sizeof(int));
-  double *work_buffer = malloc(N * sizeof(double));
+  double *work_buffer = calloc(sizeof(double),N);
   work_buffer[N - 1] = 0.6;
 
   struct timeval start_time; /* time when program started */
@@ -128,7 +128,7 @@ double use_persistent_comm() {
 
 double without_comm() {
 
-  double *work_buffer = malloc(N * sizeof(double));
+  double *work_buffer = calloc(sizeof(double),N);
   work_buffer[N - 1] = 0.6;
 
   struct timeval start_time; /* time when program started */
