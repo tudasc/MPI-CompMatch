@@ -16,6 +16,7 @@
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
 //#define STATISTIC_PRINTING
+#define BUFFER_CONTENT_CHECKING
 
 // end config
 
@@ -55,6 +56,10 @@ struct mpiopt_request {
   MPI_Request rdma_exchange_request_send;
   void *rdma_info_buf;
   // struct mpiopt_request* rdma_exchange_buffer;
+#ifdef BUFFER_CONTENT_CHECKING
+  void *checking_buf;
+  MPI_Request chekcking_request;
+#endif
 };
 typedef struct mpiopt_request MPIOPT_Request;
 
@@ -71,6 +76,10 @@ MPI_Comm handshake_response_communicator;
 // we need a different comm here, so that send a handshake response (recv
 // handshake) cannot be mistaken for another handshake-request from a send with
 // the same tag
+#ifdef BUFFER_CONTENT_CHECKING
+MPI_Comm checking_communicator;
+#endif
+
 int dummy_int = 0;
 
 void empty_function(void *request, ucs_status_t status) {
@@ -663,6 +672,11 @@ static int MPIOPT_Start_send_internal(MPIOPT_Request *request) {
   } else {
     assert(false && "Error: uninitialized Request");
   }
+#ifdef BUFFER_CONTENT_CHECKING
+  MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest, request->tag,
+            checking_communicator, &request->chekcking_request);
+
+#endif
 }
 
 static int MPIOPT_Start_recv_internal(MPIOPT_Request *request) {
@@ -683,6 +697,12 @@ static int MPIOPT_Start_recv_internal(MPIOPT_Request *request) {
   } else {
     assert(false && "Error: uninitialized Request");
   }
+
+#ifdef BUFFER_CONTENT_CHECKING
+  MPI_Irecv(request->checking_buf, request->size, MPI_BYTE, request->dest,
+            request->tag, checking_communicator, &request->chekcking_request);
+
+#endif
 }
 
 static int MPIOPT_Start_internal(MPIOPT_Request *request) {
@@ -807,6 +827,18 @@ static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
   } else {
     assert(false && "Error: uninitialized Request");
   }
+
+#ifdef BUFFER_CONTENT_CHECKING
+  MPI_Wait(&request->chekcking_request, MPI_STATUS_IGNORE);
+
+  // compare buffer
+  int buffer_has_expected_content =
+      memcmp(request->checking_buf, request->buf, request->size);
+
+  assert(buffer_has_expected_content == 0 &&
+         "Error, The buffer has not the content of the message");
+
+#endif
 }
 
 static int MPIOPT_Wait_internal(MPIOPT_Request *request, MPI_Status *status) {
@@ -857,6 +889,10 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
   request->comm = comm;
   request->backup_request = MPI_REQUEST_NULL;
   request->remote_data_addr = NULL;
+
+#ifdef BUFFER_CONTENT_CHECKING
+  request->checking_buf = malloc(count);
+#endif
 
   send_rdma_info(request);
 
@@ -940,6 +976,10 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
    request->type = 0; // uninitialized
    */
+#ifdef BUFFER_CONTENT_CHECKING
+  free(request->checking_buf);
+#endif
+
   return MPI_SUCCESS;
 }
 
@@ -957,6 +997,9 @@ void MPIOPT_INIT() {
 
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_communicator);
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_response_communicator);
+#ifdef BUFFER_CONTENT_CHECKING
+  MPI_Comm_dup(MPI_COMM_WORLD, &checking_communicator);
+#endif
 }
 void MPIOPT_FINALIZE() {
   MPI_Win_free(&global_comm_win);
@@ -996,6 +1039,9 @@ void MPIOPT_FINALIZE() {
 
   MPI_Comm_free(&handshake_communicator);
   MPI_Comm_free(&handshake_response_communicator);
+#ifdef BUFFER_CONTENT_CHECKING
+  MPI_Comm_free(&checking_communicator);
+#endif
 }
 
 int MPIOPT_Start(MPI_Request *request) {
