@@ -4,6 +4,8 @@ cp /home/tj75qeje/mpi-comp-match/openmpi-patch/one-sided-persistent.c /home/tj75
 
 include definitions from header low-level.h in ompi/include/mpi.h.in
 
+beware that is is inside the #if defined(c_plusplus) || defined(__cplusplus) block that defines extern C for calling it from cpp
+
 patch makefile.in:
 add line 1746
 add in line 452
