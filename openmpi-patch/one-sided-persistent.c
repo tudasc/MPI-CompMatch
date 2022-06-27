@@ -247,8 +247,8 @@ static void wait_for_completion_blocking(void *request) {
   ucp_request_free(request);
 }
 // operation_number*2= op has not started on remote
-// operation_number*2 +1= op has started on remote, 	we should initiate data
-// transfer operation_number*2 + 2= op has finished on remote
+// operation_number*2 +1= op has started on remote, we should initiate
+// data-transfer operation_number*2 + 2= op has finished on remote
 
 static void b_send(MPIOPT_Request *request) {
 
@@ -316,7 +316,10 @@ static void e_send(MPIOPT_Request *request) {
     ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
   }
 
-  if (__builtin_expect(request->flag < request->operation_number * 2 + 2, 0)) {
+  while (
+      __builtin_expect(request->flag < request->operation_number * 2 + 2, 0)) {
+    progress_other_requests(request);
+    ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
     // after some time: also test if the other rank has freed the request in
     // between
     // e_send_with_comm_abort_test(request);
@@ -394,6 +397,12 @@ static void e_recv(MPIOPT_Request *request) {
                               count < RDMA_SPIN_WAIT_THRESHOLD,
                           0)) {
     ++count;
+    ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+  }
+
+  while (
+      __builtin_expect(request->flag < request->operation_number * 2 + 1, 0)) {
+    progress_other_requests(request);
     ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
   }
 
@@ -851,10 +860,8 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 
   send_rdma_info(request);
 
-  // TODO why can this deadlock?
-  // the other rank should progress
-  // look if the rdma can be established;
-  // progress_request_waiting_for_rdma(request);
+  // add request to list, so that it is progressed, if other requests have to
+  // wait
   add_request_to_list(request);
 
   return MPI_SUCCESS;
@@ -887,8 +894,6 @@ static int MPIOPT_Send_init_internal(void *buf, int count,
   return init_request(buf, count, datatype, source, tag, comm, request);
 }
 
-// TODO this is blocking: we may want to do it non-blocking and free all
-// leftover ressources at the end?
 static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 
 #ifdef STATISTIC_PRINTING
