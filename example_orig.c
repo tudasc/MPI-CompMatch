@@ -20,7 +20,7 @@
 
 #define DUMMY_WLOAD_TIME 7
 
-//#define STATISTIC_PRINTING
+#define STATISTIC_PRINTING
 
 // bufsize and num iter have to be large to get performance benefit, otherwise
 // slowdown occur
@@ -34,8 +34,8 @@
 //#define NUM_ITERS 100000
 #define NUM_ITERS 25000
 
-//#define BUFFER_SIZE 10
-//#define NUM_ITERS 3
+#define BUFFER_SIZE 10
+#define NUM_ITERS 30
 
 #define N BUFFER_SIZE
 
@@ -46,20 +46,21 @@ void dummy_workload(double *buf) {
   }}
 }
 
-void check_buffer_content(int *buf, int n) {
+void check_buffer_content(int *buf,int peer, int n) {
   int not_correct = 0;
 
   for (int i = 0; i < N; ++i) {
-    if (buf[i] != 1 * i * n) {
+    if (buf[i] != peer * i * n) {
       not_correct++;
     }
 
   }
 
   if (not_correct != 0) {
-    printf("ERROR: %d: buffer has unexpected content\n", n);
+    printf("ERROR: %d: buffer has unexpected content (%d/%d errors)\n", n,not_correct,N);
     // exit(-1);
   }
+
 }
 
 #define tag_entry 42
@@ -112,7 +113,7 @@ double use_persistent_comm() {
       MPI_Wait(&req_r, MPI_STATUS_IGNORE);
 
 #ifdef STATISTIC_PRINTING
-      check_buffer_content(buffer_r, n);
+      check_buffer_content(buffer_r,peer, n);
 #endif
 
     }
