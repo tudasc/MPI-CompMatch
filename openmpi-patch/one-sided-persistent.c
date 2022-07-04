@@ -16,7 +16,7 @@
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
 //#define STATISTIC_PRINTING
-#define BUFFER_CONTENT_CHECKING
+//#define BUFFER_CONTENT_CHECKING
 
 // end config
 
@@ -261,7 +261,7 @@ static void wait_for_completion_blocking(void *request) {
 
 static void b_send(MPIOPT_Request *request) {
 
-  if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 0)) {
+  if (__builtin_expect(request->flag == request->operation_number * 2 + 1, 1)) {
     // increment: signal that WE finish the operation on the remote
     request->flag++;
     // no possibility of data-race, the remote will wait for us to put the data
