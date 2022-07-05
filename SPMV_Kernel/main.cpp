@@ -100,17 +100,20 @@ int main(int argc, char * argv[]) {
 
   unsigned long flop = num_iters*GetNumber_of_flop_for_SPMV(A, x);
 
-  double flops= flop / time;
+  double flops= (double) flop / time;
 
+  unsigned long sum_flop;
   double max_time;
   double sum_flops;
   MPI_Reduce(&time,&max_time,1,MPI_DOUBLE,MPI_MAX,0,MPI_COMM_WORLD);
   MPI_Reduce(&flops,&sum_flops,1,MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+  MPI_Reduce(&flop,&sum_flop,1,MPI_UNSIGNED_LONG,MPI_SUM,0,MPI_COMM_WORLD);
 
-  double avg_flops= sum_flops/size;
+  double avg_flops= sum_flops/(double)size;
 
   if (rank==0){
 	  std::cout << "Time: " << max_time << "\n"
+			  << "Sum Flop: " << sum_flop << "\n"
 			  << "Avg Flops: " << avg_flops << "\n";
 
   }
