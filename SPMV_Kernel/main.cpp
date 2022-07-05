@@ -5,9 +5,6 @@
 #include <fstream>
 #include <iostream>
 #include <cstdlib>
-#ifdef HPCG_DETAILED_DEBUG
-using std::cin;
-#endif
 using std::endl;
 
 #include <vector>
@@ -27,8 +24,10 @@ using std::endl;
 
 int main(int argc, char * argv[]) {
 
-#ifndef HPCG_NO_MPI
+
   MPI_Init(&argc, &argv);
+#ifdef ENABLE_MPIOPT
+  MPIOPT_INIT();
 #endif
 
 //TODO  READ PARAMETERS
@@ -38,11 +37,26 @@ int main(int argc, char * argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD,&size);
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
 
-  //TODO
+
   local_int_t nx,ny,nz;
   nx = 10;
   ny = 10;
   nz = 10;
+  local_int_t num_iters=10;
+
+  //parse args
+  if (argc>1){
+	  nx= atoi(argv[1]);
+  }
+  if (argc>2){
+  	  ny= atoi(argv[2]);
+    }
+  if (argc>3){
+  	  nz= atoi(argv[3]);
+    }
+  if (argc>4){
+    	  num_iters= atoi(argv[4]);
+      }
 
   int ierr = 0;  // Used to check return codes on function calls
 
@@ -58,16 +72,48 @@ int main(int argc, char * argv[]) {
   SetupHalo(A);
   OptimizeProblem(A);
 
-//TODO call spmv for a number of times
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  double start_time = MPI_Wtime();
+
 
   RegisterHaloVector(A,x);
 
   BeginExchangeHaloSend(A,x);
-  BeginExchangeHaloRecv(A,x);
-  ComputeSPMV(A,x,b,true);
+    BeginExchangeHaloRecv(A,x);
 
-  unsigned long flop = GetNumber_of_flop_for_SPMV(A, x);
-  std::cout <<"Calculated SPMV with" << flop << "flops \n";
+  for (int i = 0; i < num_iters; ++i) {
+    ComputeSPMV(A,x,b,true);//ends Halo exchange
+    BeginExchangeHaloRecv(A,x);
+    // "compute" new x
+    FillRandomVector(b);
+    CopyVector(b,x);
+    BeginExchangeHaloSend(A,x);
+  }
+
+  EndExchangeHaloSend(A,x);
+  EndExchangeHaloSend(A,x);
+
+  double end_time = MPI_Wtime();
+
+  double time = end_time-start_time;
+
+  unsigned long flop = num_iters*GetNumber_of_flop_for_SPMV(A, x);
+
+  double flops= flop / time;
+
+  double max_time;
+  double sum_flops;
+  MPI_Reduce(&time,&max_time,1,MPI_DOUBLE,MPI_MAX,0,MPI_COMM_WORLD);
+  MPI_Reduce(&flops,&sum_flops,1,MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+
+  double avg_flops= sum_flops/size;
+
+  if (rank==0){
+	  std::cout << "Time: " << max_time << "\n"
+			  << "Avg Flops: " << avg_flops << "\n";
+
+  }
 
 
   DeRegisterHaloVector(A,x);
@@ -78,6 +124,9 @@ int main(int argc, char * argv[]) {
   DeleteVector(b);
   DeleteVector(xexact);
 
+#ifdef ENABLE_MPIOPT
+  MPIOPT_FINALIZE();
+#endif
   MPI_Finalize();
 
   return 0;

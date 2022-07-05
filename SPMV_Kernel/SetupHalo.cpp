@@ -209,11 +209,19 @@ void RegisterHaloVector(const SparseMatrix & A,Vector & x)
 
 	  for (local_int_t i = 0; i < A.numberOfSendNeighbors; ++i) {
 		  local_int_t n_recv = A.receiveLength[i];
+#ifdef ENABLE_MPIOPT
+		  MPIOPT_Recv_init(x_external, n_recv*sizeof(double), MPI_BYTE, A.neighbors[i], MPI_MY_TAG, MPI_COMM_WORLD, &A.halo_requests[i]);
+#else
 		  MPI_Recv_init(x_external, n_recv, MPI_DOUBLE, A.neighbors[i], MPI_MY_TAG, MPI_COMM_WORLD, &A.halo_requests[i]);
+#endif
 		  x_external += n_recv;
 
 		  local_int_t n_send = A.sendLength[i];
+#ifdef ENABLE_MPIOPT
+		  MPIOPT_Send_init(sendBuffer, n_send*sizeof(double), MPI_BYTE, A.neighbors[i], MPI_MY_TAG, MPI_COMM_WORLD,&A.halo_requests[i+A.numberOfSendNeighbors]);
+#else
 		  MPI_Send_init(sendBuffer, n_send, MPI_DOUBLE, A.neighbors[i], MPI_MY_TAG, MPI_COMM_WORLD,&A.halo_requests[i+A.numberOfSendNeighbors]);
+#endif
 		  sendBuffer += n_send;
 	}
 
@@ -236,7 +244,11 @@ void DeRegisterHaloVector(const SparseMatrix & A,Vector & x)
 
 	  // free old requests
 	  for (int i = 0; i < A.numberOfSendNeighbors*2; ++i) {
+#ifdef ENABLE_MPIOPT
+			MPIOPT_Request_free(&A.halo_requests[i]);
+#else
 	  	MPI_Request_free(&A.halo_requests[i]);
+#endif
 	  }
 	  A.halo_exchange_vector=NULL;
 }

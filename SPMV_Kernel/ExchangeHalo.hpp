@@ -26,7 +26,14 @@ inline void BeginExchangeHaloRecv(const SparseMatrix &A, Vector &x) {
 	assert(A.halo_exchange_vector==&x);
 
 	// start MPI communication
+#ifdef ENABLE_MPIOPT
+	for (int i = 0; i < A.numberOfSendNeighbors; ++i) {
+		MPIOPT_Start(&A.halo_requests[i]);
+	}
+#else
 	MPI_Startall(A.numberOfSendNeighbors, A.halo_requests);
+#endif
+
 
 	return;
 
@@ -50,23 +57,38 @@ inline void BeginExchangeHaloSend(const SparseMatrix &A, Vector &x) {
 
 	// start MPI communication
 	// send are second batch of requests in list
+#ifdef ENABLE_MPIOPT
+	for (int i = 0; i < A.numberOfSendNeighbors; ++i) {
+		MPIOPT_Start(&A.halo_requests[i+A.numberOfSendNeighbors]);
+	}
+#else
 	MPI_Startall(A.numberOfSendNeighbors, &A.halo_requests[A.numberOfSendNeighbors]);
-
+#endif
 	return;
 
 }
 
 inline void EndExchangeHaloSend(const SparseMatrix &A, Vector &x) {
+#ifdef ENABLE_MPIOPT
+	for (int i = 0; i < A.numberOfSendNeighbors; ++i) {
+		MPIOPT_Wait(&A.halo_requests[i+A.numberOfSendNeighbors],MPI_STATUS_IGNORE);
+	}
+#else
 	MPI_Waitall(A.numberOfSendNeighbors , &A.halo_requests[A.numberOfSendNeighbors],
 			MPI_STATUSES_IGNORE);
-
+#endif
 	return;
 }
 
 inline void EndExchangeHaloRecv(const SparseMatrix &A, Vector &x) {
+#ifdef ENABLE_MPIOPT
+	for (int i = 0; i < A.numberOfSendNeighbors; ++i) {
+		MPIOPT_Wait(&A.halo_requests[i],MPI_STATUS_IGNORE);
+	}
+#else
 	MPI_Waitall(A.numberOfSendNeighbors , A.halo_requests,
 			MPI_STATUSES_IGNORE);
-
+#endif
 	return;
 }
 
