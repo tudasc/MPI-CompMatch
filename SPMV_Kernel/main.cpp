@@ -92,7 +92,7 @@ int main(int argc, char * argv[]) {
   }
 
   EndExchangeHaloSend(A,x);
-  EndExchangeHaloSend(A,x);
+  EndExchangeHaloRecv(A,x);
 
   double end_time = MPI_Wtime();
 
