@@ -15,6 +15,7 @@
 #ifndef COMPUTESPMV_HPP
 #define COMPUTESPMV_HPP
 #include "Vector.hpp"
+#include "ExchangeHalo.hpp"
 #include "SparseMatrix.hpp"
 
 /*!

@@ -80,7 +80,7 @@ int main(int argc, char * argv[]) {
   RegisterHaloVector(A,x);
 
   BeginExchangeHaloSend(A,x);
-    BeginExchangeHaloRecv(A,x);
+  BeginExchangeHaloRecv(A,x);
 
   for (int i = 0; i < num_iters; ++i) {
     ComputeSPMV(A,x,b,true);//ends Halo exchange
