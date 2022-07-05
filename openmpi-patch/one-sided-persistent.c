@@ -278,6 +278,7 @@ static void b_send(MPIOPT_Request *request) {
     status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
     status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                          request->remote_flag_addr, request->remote_flag_rkey);
+    assert(request->ucx_request_data_transfer ==NULL);
     request->ucx_request_data_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
 
@@ -290,7 +291,7 @@ static void b_send(MPIOPT_Request *request) {
     ucs_status_t status =
         ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                     request->remote_flag_addr, request->remote_flag_rkey);
-
+    assert(request->ucx_request_flag_transfer ==NULL);
     request->ucx_request_flag_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
     // TODO do I call progress here?
@@ -363,7 +364,7 @@ static void b_recv(MPIOPT_Request *request) {
     status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                          request->remote_flag_addr, request->remote_flag_rkey);
     assert(status == UCS_OK || status == UCS_INPROGRESS);
-
+    assert(request->ucx_request_data_transfer ==NULL);
     request->ucx_request_data_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
 
@@ -378,7 +379,7 @@ static void b_recv(MPIOPT_Request *request) {
         ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                     request->remote_flag_addr, request->remote_flag_rkey);
     assert(status == UCS_OK || status == UCS_INPROGRESS);
-
+    assert(request->ucx_request_flag_transfer ==NULL);
     request->ucx_request_flag_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
     // TODO do I call progress here?
@@ -953,6 +954,9 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   // will not rdma to it
   if (request->type == RECV_REQUEST_TYPE ||
       request->type == SEND_REQUEST_TYPE) {
+
+	  assert(request->ucx_request_data_transfer == NULL);
+	  assert(request->ucx_request_flag_transfer == NULL);
     ucp_context_h context = mca_osc_ucx_component.ucp_context;
     // ucp_mem_unmap(context, request->mem_handle_flag);// deferred
     ucp_mem_unmap(context, request->mem_handle_data);
@@ -1024,9 +1028,10 @@ void MPIOPT_FINALIZE() {
 
       if (req->type == RECV_REQUEST_TYPE || req->type == SEND_REQUEST_TYPE) {
         // otherwise all these resources where never acquired
-        ucp_rkey_destroy(req->remote_flag_rkey);
-        ucp_mem_unmap(context, req->mem_handle_flag);
-        // ucp_mem_unmap(context, req->mem_handle_data);
+    	  ucp_mem_unmap(context, req->mem_handle_flag);
+    	  ucp_rkey_destroy(req->remote_flag_rkey);
+
+        // ucp_mem_unmap(context, req->mem_handle_data); // was freed before
       }
       free(req);
     }
