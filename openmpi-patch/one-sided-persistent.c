@@ -15,8 +15,8 @@
 // config :
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-#define STATISTIC_PRINTING
-#define BUFFER_CONTENT_CHECKING
+//#define STATISTIC_PRINTING
+//#define BUFFER_CONTENT_CHECKING
 
 // end config
 
