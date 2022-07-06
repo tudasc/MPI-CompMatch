@@ -30,9 +30,9 @@
 //#define BUFFER_SIZE 1000000
 
 // 10KB
-#define BUFFER_SIZE 10000
+//#define BUFFER_SIZE 10000
 //#define NUM_ITERS 100000
-#define NUM_ITERS 25000
+//#define NUM_ITERS 25000
 
 #define BUFFER_SIZE 10
 #define NUM_ITERS 30
