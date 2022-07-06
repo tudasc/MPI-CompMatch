@@ -924,7 +924,7 @@ static int MPIOPT_Send_init_internal(void *buf, int count,
 #ifdef STATISTIC_PRINTING
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  printf("Rank %d: Init SEND to %d\n", rank, source);
+  printf("Rank %d: Init SEND to %d with msg size %d\n", rank, source,count);
 #endif
   memset(request, 0, sizeof(MPIOPT_Request));
   request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
