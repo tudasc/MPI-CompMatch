@@ -10,6 +10,10 @@ patch makefile.in:
 add line 1746
 add in line 452
 
+patch /ompi/mca/osc/ucx/osc_ucx_component.c
+line 351 to:
+        context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64 | UCP_FEATURE_AM;
+
 
 configure:
 
