@@ -279,7 +279,15 @@ static void e_send(MPIOPT_Request *request) {
 static void b_recv(MPIOPT_Request *request) {
 
 	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
-	// nothing to do
+	// if there is a msg to receive: use it
+	if (request->list_of_pending_msgs!=NULL){
+		// this preserves correct msg order if the sender "overtakes"
+		dequeue_from_list_of_incoming_msg(request);
+		request->operation_number++;
+	}
+	// else: nothing to do
+
+
 }
 
 static void e_recv(MPIOPT_Request *request) {
