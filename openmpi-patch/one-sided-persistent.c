@@ -18,7 +18,15 @@
 //#define STATISTIC_PRINTING
 //#define BUFFER_CONTENT_CHECKING
 
+#define USE_EAGER
+
+//#define USE_RENDEZVOUS
+
 // end config
+
+#if defined(USE_RENDEZVOUS) + defined(USE_EAGER) != 1
+#error Define only one Sending Mode (either USE_EAGER or USE_RENDEZVOUS)
+#endif
 
 #define RECV_REQUEST_TYPE 1
 #define SEND_REQUEST_TYPE 2
@@ -59,7 +67,7 @@ struct mpiopt_request {
 	// MPI_Request rdma_exchange_request;
 	MPI_Request rdma_exchange_request;
 	void *rdma_info_buf;
-	// struct mpiopt_request* rdma_exchange_buffer;
+// struct mpiopt_request* rdma_exchange_buffer;
 #ifdef BUFFER_CONTENT_CHECKING
 	void *checking_buf;
 	MPI_Request chekcking_request;
@@ -123,7 +131,7 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request);
 static void add_to_list_of_incoming_msg(MPIOPT_Request *request, void *data) {
 	void *new_elem = malloc(request->size + sizeof(void*));
 	*(void**) new_elem = NULL;
-	memcpy(new_elem+sizeof(void*), data, request->size);
+	memcpy(new_elem + sizeof(void*), data, request->size);
 
 	// enque in list
 
@@ -150,12 +158,12 @@ static void add_to_list_of_incoming_msg(MPIOPT_Request *request, void *data) {
 }
 
 static void dequeue_from_list_of_incoming_msg(MPIOPT_Request *request) {
-	assert(request->list_of_pending_msgs!=NULL);
+	assert(request->list_of_pending_msgs != NULL);
 	void *cur_elem = request->list_of_pending_msgs;
 	void *nxt_elem = *(void**) cur_elem;
 	request->list_of_pending_msgs = nxt_elem;
 
-	memcpy(request->buf, cur_elem+sizeof(void*), request->size);
+	memcpy(request->buf, cur_elem + sizeof(void*), request->size);
 }
 
 ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
@@ -167,6 +175,9 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 	assert(request->size == length && "Wrong message size");
 
 	if (param->recv_attr & UCP_AM_RECV_ATTR_FLAG_RNDV) {
+#ifdef USE_EAGER
+		assert(0 && "Compiled for eager, no rendevouz msg should arrive");
+#endif
 		/* Rendezvous request arrived, data contains an internal UCX descriptor,
 		 * which has to be passed to ucp_am_recv_data_nbx function to confirm
 		 * data transfer.
@@ -175,18 +186,40 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 #ifdef STATISTIC_PRINTING
 		printf("Recv Rendezvous msg\n");
 #endif
-		assert(false && "Currently not implemented");
-		return UCS_INPROGRESS;
+		assert(request->list_of_pending_msgs == NULL);
+		if (request->operation_number % 2 == 0) {
+			//request is not active
+			request->list_of_pending_msgs = data;
+#ifdef STATISTIC_PRINTING
+		printf("Recv needs to be deferred in callback\n");
+#endif
+			return UCS_INPROGRESS;
+		} else {
+			// request is active
+			assert(request->ucx_request_data_transfer == NULL);
+			// start the recv
+			request->ucx_request_data_transfer = ucp_am_recv_data_nbx(
+					mca_osc_ucx_component.ucp_worker, data, request->buf,
+					request->size, &request->ucp_request_param);
+#ifdef STATISTIC_PRINTING
+		printf("Recv Started in callback for incoming msg\n");
+#endif
+			return UCS_INPROGRESS;
+		}
+
 	}
 	// else
 	/* Message delivered with eager protocol, data should be available
 	 * immediately
 	 */
+#ifdef USE_RENDEZVOUS
+	assert(false && "Compiled for RENDEZVOUS, no eager msg should arrive");
+#endif
 
 	if (param->recv_attr & UCP_AM_RECV_ATTR_FIELD_REPLY_EP) {
 
 		assert(
-				false && "What is this field about? we dont want to reply to a msg");
+		false && "What is this field about? we dont want to reply to a msg");
 	}
 
 	/*	if(param->recv_attr & UCP_AM_RECV_ATTR_FLAG_DATA  )
@@ -239,12 +272,47 @@ static void remove_request_from_list(MPIOPT_Request *request) {
 	free(current_elem);
 }
 
-static void wait_for_completion_blocking(void *request) {
+static void progress_recv_request(MPIOPT_Request *request) {
+	// do same action as when starting
+	// check for available msg and initiate data transfer if necessary
+b_recv(request);
+}
+
+
+static void progress_request(MPIOPT_Request *request) {
+  if (request->type == SEND_REQUEST_TYPE) {
+    // nothing to do: the receive requests will be responsible for progress
+  } else if (request->type == RECV_REQUEST_TYPE) {
+    progress_recv_request(request);
+  } else if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+    // nothing to do: MPI fallback is used
+  } else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+	  // nothing to do: MPI fallback is used
+  }
+}
+
+// call if one get stuck while waiting for a request to complete: progresses all
+// other requests
+static void progress_other_requests(MPIOPT_Request *current_request) {
+  struct list_elem *current_elem = request_list_head->next;
+
+  while (current_elem != NULL) {
+    // we are stuck on this request, and should progress the others
+    // after we return, the control flow goes back to this request anyway
+    if (current_elem->elem != current_request) {
+      progress_request(current_elem->elem);
+    }
+    current_elem = current_elem->next;
+  }
+}
+
+static void wait_for_completion_blocking(void *request,MPIOPT_Request *current_request) {
 	assert(request != NULL);
 	ucs_status_t status;
 	do {
 		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 		status = ucp_request_check_status(request);
+		progress_other_requests(current_request);
 	} while (status == UCS_INPROGRESS);
 	ucp_request_free(request);
 }
@@ -271,7 +339,7 @@ static void e_send(MPIOPT_Request *request) {
 
 	// busy wait
 	if (__builtin_expect(request->ucx_request_data_transfer != NULL, 0)) {
-		wait_for_completion_blocking(request->ucx_request_data_transfer);
+		wait_for_completion_blocking(request->ucx_request_data_transfer,request);
 		request->ucx_request_data_transfer = NULL;
 	}
 }
@@ -279,18 +347,37 @@ static void e_send(MPIOPT_Request *request) {
 static void b_recv(MPIOPT_Request *request) {
 
 	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
+
+#ifdef USE_EAGER
 	// if there is a msg to receive: use it
 	if (request->list_of_pending_msgs!=NULL){
 		// this preserves correct msg order if the sender "overtakes"
 		dequeue_from_list_of_incoming_msg(request);
 		request->operation_number++;
+		//TODO does UCX actually preserve MSG ordering?
 	}
 	// else: nothing to do
-
+#endif
+#ifdef USE_RENDEZVOUS
+	if (__builtin_expect(request->list_of_pending_msgs != NULL, 0)) {
+		assert(request->ucx_request_data_transfer == NULL);
+		// start the recv
+		request->ucx_request_data_transfer = ucp_am_recv_data_nbx(
+				mca_osc_ucx_component.ucp_worker, request->list_of_pending_msgs,
+				request->buf, request->size, &request->ucp_request_param);
+		request->list_of_pending_msgs = NULL;
+#ifdef STATISTIC_PRINTING
+		printf("Recv Started in b_recv\n");
+#endif
+	}
+	// else nothing to do, the recv callback will start the recv procedure when msg arrives
+#endif
 
 }
 
 static void e_recv(MPIOPT_Request *request) {
+
+#ifdef USE_EAGER
 	if (__builtin_expect(request->operation_number % 2 != 0, 0)) {
 
 		// wait for msg to arrive if it hasnt already
@@ -306,13 +393,35 @@ static void e_recv(MPIOPT_Request *request) {
 		}
 
 	}	// else msg has arrived, nothing to do
+#endif
+#ifdef USE_RENDEZVOUS
+	// to be shure: check if recv still needs to be issued
+	if (__builtin_expect(request->list_of_pending_msgs != NULL, 0)) {
+		assert(request->ucx_request_data_transfer == NULL);
+		// start the recv
+		request->ucx_request_data_transfer = ucp_am_recv_data_nbx(
+				mca_osc_ucx_component.ucp_worker, request->list_of_pending_msgs,
+				request->buf, request->size, &request->ucp_request_param);
+		request->list_of_pending_msgs = NULL;
+#ifdef STATISTIC_PRINTING
+		printf("Recv Started Late, this may degrade performance\n");
+#endif
+	}
+	if (request->ucx_request_data_transfer != NULL) {
+		wait_for_completion_blocking(request->ucx_request_data_transfer,request);
+		request->ucx_request_data_transfer = NULL;
+	}
+
+#endif
 }
 
 // exchanges the RDMA info and maps all mem for RDMA op
 static void send_rdma_info(MPIOPT_Request *request) {
 
 	assert(
-			request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION || request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
+			request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION
+					|| request->type
+							== RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
 
 	if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
 
@@ -344,7 +453,9 @@ static void send_rdma_info(MPIOPT_Request *request) {
 static void receive_rdma_info(MPIOPT_Request *request) {
 
 	assert(
-			request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION || request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
+			request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION
+					|| request->type
+							== RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
 
 	// nothing to do
 
@@ -356,7 +467,7 @@ static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 	int flag;
 	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
 	if (flag) {
-		assert(request->rdma_exchange_request==MPI_REQUEST_NULL);
+		assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
 		request->type = SEND_REQUEST_TYPE;
 		b_send(request);
 	} else {
@@ -374,7 +485,7 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
 	int flag;
 	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
 	if (flag) {
-		assert(request->rdma_exchange_request==MPI_REQUEST_NULL);
+		assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
 		request->type = RECV_REQUEST_TYPE;
 		b_recv(request);
 	} else {
@@ -462,7 +573,7 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 		MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
 		if (flag) {
 			// handshake successful
-			assert(request->rdma_exchange_request==MPI_REQUEST_NULL);
+			assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
 			request->type = RECV_REQUEST_TYPE;
 			b_recv(request);
 			e_recv(request);
@@ -585,8 +696,16 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 	request->list_of_pending_msgs = NULL;
 
 	memset(&request->ucp_request_param, 0, sizeof(ucp_request_param_t));
+
+	if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+#ifdef USE_RENDEZVOUS
+		request->ucp_request_param.flags = UCP_AM_SEND_FLAG_RNDV;
+#endif
+#ifdef USE_EAGER
 	request->ucp_request_param.flags = UCP_AM_SEND_FLAG_EAGER;
-	request->ucp_request_param.op_attr_mask = UCP_OP_ATTR_FIELD_FLAGS;
+#endif
+		request->ucp_request_param.op_attr_mask = UCP_OP_ATTR_FIELD_FLAGS;
+	}
 
 #ifdef BUFFER_CONTENT_CHECKING
 	request->checking_buf = malloc(count);
