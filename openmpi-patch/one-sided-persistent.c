@@ -3,6 +3,7 @@
 
 // why does other header miss this include?
 #include <stdbool.h>
+#include <pthread.h>
 
 #include "ompi/mca/osc/base/base.h"
 #include "ompi/mca/osc/base/osc_base_obj_convert.h"
@@ -15,13 +16,15 @@
 // config :
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-//#define STATISTIC_PRINTING
-//#define BUFFER_CONTENT_CHECKING
+#define STATISTIC_PRINTING
+#define BUFFER_CONTENT_CHECKING
 
 #define USE_EAGER
 
 //#define USE_RENDEZVOUS
 
+
+#define USE_LOCKING
 // end config
 
 #if defined(USE_RENDEZVOUS) + defined(USE_EAGER) != 1
@@ -67,6 +70,9 @@ struct mpiopt_request {
 	// MPI_Request rdma_exchange_request;
 	MPI_Request rdma_exchange_request;
 	void *rdma_info_buf;
+#ifdef USE_LOCKING
+	pthread_mutex_t mutex;
+#endif
 // struct mpiopt_request* rdma_exchange_buffer;
 #ifdef BUFFER_CONTENT_CHECKING
 	void *checking_buf;
@@ -135,16 +141,20 @@ static void add_to_list_of_incoming_msg(MPIOPT_Request *request, void *data) {
 
 	// enque in list
 
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+
+
 	if (request->list_of_pending_msgs == NULL) {
 #ifdef STATISTIC_PRINTING
-		printf("Recv msg, bufferd it\n");
+		printf("Rank %d: Recv msg, bufferd it\n",rank);
 #endif
 		request->list_of_pending_msgs = new_elem;
 	} else {
 		// traverse the list, we need to enqueue at the end to keep order
 #ifdef STATISTIC_PRINTING
 		printf(
-				"Need to enqueue into list of pending Msg, this may degrade performance\n");
+				"Rank %d: Need to enqueue into list of pending Msg, this may degrade performance\n",rank);
 #endif
 
 		void *cur_elem = request->list_of_pending_msgs;
@@ -173,6 +183,9 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 	MPIOPT_Request *request = (MPIOPT_Request*) arg;
 
 	assert(request->size == length && "Wrong message size");
+
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
 
 	if (param->recv_attr & UCP_AM_RECV_ATTR_FLAG_RNDV) {
 #ifdef USE_EAGER
@@ -231,19 +244,27 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 	 }
 	 else{*/
 // WHY is this necessary and we cannot keep UCS's memory around?
+#ifdef USE_LOCKING
+	pthread_mutex_lock(&request->mutex);
+#endif
 	if (request->operation_number % 2 == 0) {
 		//request is not active
 		add_to_list_of_incoming_msg(request, data);
 
 	} else {
 #ifdef STATISTIC_PRINTING
-		printf("Recv msg without the need of buffering it\n");
+		printf(" Rank: %d Recv msg without the need of buffering it\n",rank);
 #endif
 		// recv is active, we can override the data buffer
 		//TODO atomic inrement for multi threading
+		// do not overtake another msg
+		assert(request->list_of_pending_msgs==NULL);
 		request->operation_number++;
 		memcpy(request->buf, data, request->size);
 	}
+#ifdef USE_LOCKING
+	pthread_mutex_unlock(&request->mutex);
+#endif
 
 	return UCS_OK;
 
@@ -351,9 +372,15 @@ static void b_recv(MPIOPT_Request *request) {
 #ifdef USE_EAGER
 	// if there is a msg to receive: use it
 	if (request->list_of_pending_msgs!=NULL){
+#ifdef USE_LOCKING
+		pthread_mutex_lock(&request->mutex);
+#endif
 		// this preserves correct msg order if the sender "overtakes"
 		dequeue_from_list_of_incoming_msg(request);
 		request->operation_number++;
+#ifdef USE_LOCKING
+		pthread_mutex_unlock(&request->mutex);
+#endif
 		//TODO does UCX actually preserve MSG ordering?
 	}
 	// else: nothing to do
@@ -388,8 +415,14 @@ static void e_recv(MPIOPT_Request *request) {
 
 		// receive msg from queue
 		if (__builtin_expect(request->operation_number % 2 != 0, 1)) {
+#ifdef USE_LOCKING
+			pthread_mutex_lock(&request->mutex);
+#endif
 			request->operation_number++;
 			dequeue_from_list_of_incoming_msg(request);
+#ifdef USE_LOCKING
+			pthread_mutex_unlock(&request->mutex);
+#endif
 		}
 
 	}	// else msg has arrived, nothing to do
@@ -580,6 +613,8 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 
 		} else {
 			MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
+			if (flag)
+				request->operation_number++;
 		}
 
 	}
@@ -600,6 +635,10 @@ static int MPIOPT_Wait_send_internal(MPIOPT_Request *request,
 	} else {
 		assert(false && "Error: uninitialized Request");
 	}
+
+	request->operation_number++;
+
+	assert(request->operation_number % 2 == 0);// request cannot be active
 }
 
 static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
@@ -618,6 +657,7 @@ static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
 	} else {
 		assert(false && "Error: uninitialized Request");
 	}
+	assert(request->operation_number % 2 == 0);// request cannot be active
 
 #ifdef BUFFER_CONTENT_CHECKING
 	MPI_Wait(&request->chekcking_request, MPI_STATUS_IGNORE);
@@ -694,7 +734,9 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 	request->backup_request = MPI_REQUEST_NULL;
 	request->AM_ID = 0;
 	request->list_of_pending_msgs = NULL;
-
+#ifdef USE_LOCKING
+	pthread_mutex_init(&request->mutex,NULL);
+#endif
 	memset(&request->ucp_request_param, 0, sizeof(ucp_request_param_t));
 
 	if (request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
@@ -761,6 +803,9 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 	}
 #endif
 	remove_request_from_list(request);
+#ifdef USE_LOCKING
+	pthread_mutex_destroy(&request->mutex);
+#endif
 
 	if (request->type == RECV_REQUEST_TYPE) {
 		// De-Register message handler callback
