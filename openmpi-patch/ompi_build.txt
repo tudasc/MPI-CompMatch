@@ -7,8 +7,11 @@ include definitions from header low-level.h in ompi/include/mpi.h.in
 beware that is is inside the #if defined(c_plusplus) || defined(__cplusplus) block that defines extern C for calling it from cpp
 
 patch makefile.in:
-add line 1746
-add in line 452
+add line 1746:
+	one-sided-persistent.c
+(dont forget to add / in line 1745)
+patch in line 452 to
+	osc_ucx_passive_target.lo one-sided-persistent.lo
 
 patch /ompi/mca/osc/ucx/osc_ucx_component.c
 line 351 to:
