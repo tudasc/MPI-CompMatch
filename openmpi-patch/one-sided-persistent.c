@@ -23,7 +23,7 @@
 
 //#define USE_RENDEZVOUS
 
-
+// use locking for multi threaded usage
 //#define USE_LOCKING
 // end config
 
@@ -48,13 +48,13 @@ struct mpiopt_request {
 	struct ompi_request_t original_request;
 	int flag;
 	int flag_buffer;
-	long AM_ID;
+	unsigned long AM_ID;
 	void *buf;
 	size_t size;
 	// initialized locally
 	void *ucx_request_data_transfer;
 	void *ucx_request_flag_transfer;
-	int operation_number;
+	unsigned int operation_number;
 	int type;
 	ucp_mem_h mem_handle_data;
 	ucp_mem_h mem_handle_flag;
@@ -372,19 +372,21 @@ static void b_recv(MPIOPT_Request *request) {
 	ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
 #ifdef USE_EAGER
+#ifdef USE_LOCKING
+	pthread_mutex_lock(&request->mutex);
+#endif
+	request->operation_number++;
 	// if there is a msg to receive: use it
 	if (request->list_of_pending_msgs!=NULL){
-#ifdef USE_LOCKING
-		pthread_mutex_lock(&request->mutex);
-#endif
 		// this preserves correct msg order if the sender "overtakes"
 		dequeue_from_list_of_incoming_msg(request);
 		request->operation_number++;
+		//TODO does UCX actually preserve MSG ordering?
+	}
+
 #ifdef USE_LOCKING
 		pthread_mutex_unlock(&request->mutex);
 #endif
-		//TODO does UCX actually preserve MSG ordering?
-	}
 	// else: nothing to do
 #endif
 #ifdef USE_RENDEZVOUS
@@ -464,7 +466,6 @@ static void send_rdma_info(MPIOPT_Request *request) {
 		request->AM_ID = AM_tag;
 		AM_tag++;
 
-		ucp_am_handler_param_t param;
 		request->am_handler.id = request->AM_ID;
 		request->am_handler.cb = incoming_am_msg_handler;
 		request->am_handler.arg = (void*) request;
@@ -472,15 +473,17 @@ static void send_rdma_info(MPIOPT_Request *request) {
 				| UCP_AM_HANDLER_PARAM_FIELD_CB
 				| UCP_AM_HANDLER_PARAM_FIELD_ARG;
 		// register the handler
-		ucp_worker_set_am_recv_handler(mca_osc_ucx_component.ucp_worker,
+		ucs_status_t  status = ucp_worker_set_am_recv_handler(mca_osc_ucx_component.ucp_worker,
 				&request->am_handler);
+		assert(status==UCS_OK);
+
 		ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 
-		MPI_Issend(&request->AM_ID, 1, MPI_LONG, request->dest, request->tag,
+		MPI_Issend(&request->AM_ID, 1, MPI_UNSIGNED_LONG, request->dest, request->tag,
 				handshake_communicator, &request->rdma_exchange_request);
 	} else {
 
-		MPI_Irecv(&request->AM_ID, 1, MPI_LONG, request->dest, request->tag,
+		MPI_Irecv(&request->AM_ID, 1, MPI_UNSIGNED_LONG, request->dest, request->tag,
 				handshake_communicator, &request->rdma_exchange_request);
 	}
 
@@ -546,15 +549,17 @@ static int MPIOPT_Start_send_internal(MPIOPT_Request *request) {
 static int MPIOPT_Start_recv_internal(MPIOPT_Request *request) {
 
 	// TODO atomic increment for multi threading
-	request->operation_number++;
+	//request->operation_number++;
 
 	if (__builtin_expect(request->type == RECV_REQUEST_TYPE, 1)) {
 		b_recv(request);
 
 	} else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
+		request->operation_number++;
 		start_recv_when_searching_for_connection(request);
 
 	} else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
+		request->operation_number++;
 		assert(request->backup_request == MPI_REQUEST_NULL);
 		MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
 				request->tag, request->comm, &request->backup_request);
@@ -665,7 +670,7 @@ static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
 	} else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
 		wait_recv_when_searching_for_connection(request);
 	} else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
-
+		request->operation_number++;
 		MPI_Wait(&request->backup_request, status);
 	} else {
 		assert(false && "Error: uninitialized Request");
@@ -823,7 +828,8 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
 	if (request->type == RECV_REQUEST_TYPE) {
 		// De-Register message handler callback
 		request->am_handler.cb = NULL;
-		//request->am_handler.field_mask is still setup correctly
+		request->am_handler.arg = NULL;
+		//request->am_handler.field_mask is still setup correctly, as well as ID
 		ucp_worker_set_am_recv_handler(mca_osc_ucx_component.ucp_worker,
 				&request->am_handler);
 	}
