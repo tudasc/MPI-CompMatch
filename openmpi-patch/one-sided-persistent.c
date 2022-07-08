@@ -19,10 +19,9 @@
 //#define STATISTIC_PRINTING
 //#define BUFFER_CONTENT_CHECKING
 
-#define USE_EAGER
+//#define USE_EAGER
 
-//#define USE_RENDEZVOUS
-//TODO proper use of 	request->is_ready_to_recv
+#define USE_RENDEZVOUS
 
 // use locking for multi threaded usage
 //#define USE_LOCKING
@@ -192,6 +191,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 			request->ucx_request_data_transfer = ucp_am_recv_data_nbx(
 					mca_osc_ucx_component.ucp_worker, data, request->buf,
 					request->size, &request->ucp_request_param);
+			request->is_ready_to_recv=false;
 #ifdef STATISTIC_PRINTING
 		printf("Recv Started in callback for incoming msg\n");
 #endif
@@ -273,7 +273,8 @@ static void remove_request_from_list(MPIOPT_Request *request) {
 static void progress_recv_request(MPIOPT_Request *request) {
 	// do same action as when starting
 	// check for available msg and initiate data transfer if necessary
-b_recv(request);
+	if (request->is_ready_to_recv){
+b_recv(request);}
 }
 
 
@@ -320,6 +321,7 @@ static void wait_for_completion_blocking(void *request,MPIOPT_Request *current_r
 
 static void b_send(MPIOPT_Request *request) {
 
+	assert(request->ucx_request_data_transfer==NULL);
 	request->ucx_request_data_transfer = ucp_am_send_nbx(request->ep,
 			request->AM_ID, NULL, 0, request->buf, request->size,
 			&request->ucp_request_param);
@@ -377,6 +379,8 @@ static void b_recv(MPIOPT_Request *request) {
 #ifdef STATISTIC_PRINTING
 		printf("Recv Started in b_recv\n");
 #endif
+	}else{
+		request->is_ready_to_recv=true;
 	}
 	// else nothing to do, the recv callback will start the recv procedure when msg arrives
 #endif
@@ -409,18 +413,22 @@ static void e_recv(MPIOPT_Request *request) {
 	}	// else msg has arrived, nothing to do
 #endif
 #ifdef USE_RENDEZVOUS
+	/*
+	 * Not Necessary, the recv callback will start recv the msg when it is there
 	// to be shure: check if recv still needs to be issued
-	if (__builtin_expect(request->list_of_pending_msgs != NULL, 0)) {
+	if (__builtin_expect( request->list_of_pending_msgs != NULL, 0)) {
 		assert(request->ucx_request_data_transfer == NULL);
 		// start the recv
 		request->ucx_request_data_transfer = ucp_am_recv_data_nbx(
 				mca_osc_ucx_component.ucp_worker, request->list_of_pending_msgs,
 				request->buf, request->size, &request->ucp_request_param);
 		request->list_of_pending_msgs = NULL;
+		request->is_ready_to_recv=false;
 #ifdef STATISTIC_PRINTING
 		printf("Recv Started Late, this may degrade performance\n");
 #endif
-	}
+	}*/
+
 	if (request->ucx_request_data_transfer != NULL) {
 		wait_for_completion_blocking(request->ucx_request_data_transfer,request);
 		request->ucx_request_data_transfer = NULL;
