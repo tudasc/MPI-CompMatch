@@ -16,15 +16,15 @@
 // config :
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
-#define STATISTIC_PRINTING
-#define BUFFER_CONTENT_CHECKING
+//#define STATISTIC_PRINTING
+//#define BUFFER_CONTENT_CHECKING
 
 #define USE_EAGER
 
 //#define USE_RENDEZVOUS
 
 
-#define USE_LOCKING
+//#define USE_LOCKING
 // end config
 
 #if defined(USE_RENDEZVOUS) + defined(USE_EAGER) != 1
@@ -354,6 +354,8 @@ static void e_send(MPIOPT_Request *request) {
 
 	// ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 	// will call progres only if this is necessary
+	assert(request->backup_request==MPI_REQUEST_NULL);
+	// no backup communication should be active at this point
 
 	// we need to wait until the op has finished on the remote before re-using the
 	// data buffer
@@ -408,8 +410,8 @@ static void e_recv(MPIOPT_Request *request) {
 	if (__builtin_expect(request->operation_number % 2 != 0, 0)) {
 
 		// wait for msg to arrive if it hasnt already
-		while (request->operation_number % 2 != 0
-				&& request->list_of_pending_msgs == NULL) {
+		while (__builtin_expect(request->operation_number % 2 != 0
+				&& request->list_of_pending_msgs == NULL,0)) {
 			ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 		}
 
@@ -477,6 +479,7 @@ static void send_rdma_info(MPIOPT_Request *request) {
 		MPI_Issend(&request->AM_ID, 1, MPI_LONG, request->dest, request->tag,
 				handshake_communicator, &request->rdma_exchange_request);
 	} else {
+
 		MPI_Irecv(&request->AM_ID, 1, MPI_LONG, request->dest, request->tag,
 				handshake_communicator, &request->rdma_exchange_request);
 	}
@@ -496,35 +499,20 @@ static void receive_rdma_info(MPIOPT_Request *request) {
 
 static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 
-//assert(request->operation_number == 1);
-	int flag;
-	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-	if (flag) {
-		assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
-		request->type = SEND_REQUEST_TYPE;
-		b_send(request);
-	} else {
+assert(request->operation_number == 1);
 		// always post a normal msg, in case of fallback to normal comm is needed
 		// for the first time, the receiver will post a matching recv
 		assert(request->backup_request == MPI_REQUEST_NULL);
-		MPI_Isend(request->buf, request->size, MPI_BYTE, request->dest,
+		MPI_Issend(request->buf, request->size, MPI_BYTE, request->dest,
 				request->tag, request->comm, &request->backup_request);
-	}
+
 }
 
 static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
-	//assert(request->operation_number == 1);
+	assert(request->operation_number == 1);
 
-	int flag;
-	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-	if (flag) {
-		assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
-		request->type = RECV_REQUEST_TYPE;
-		b_recv(request);
-	} else {
 		MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
 				request->tag, request->comm, &request->backup_request);
-	}
 
 }
 
@@ -595,11 +583,34 @@ static int MPIOPT_Start_internal(MPIOPT_Request *request) {
 static void wait_send_when_searching_for_connection(MPIOPT_Request *request) {
 
 	MPI_Wait(&request->backup_request, MPI_STATUS_IGNORE);
+	int flag;
+		MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+		if (flag) {
+			request->type = SEND_REQUEST_TYPE;
+		}else{
+			// no handshake present
+			request->type = SEND_REQUEST_TYPE_USE_FALLBACK;
+		}
+
 }
 
 static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 
 	// wait for either the handshake or the payload data to arrive
+	MPI_Wait(&request->backup_request,MPI_STATUS_IGNORE);
+	request->operation_number++;
+
+	int flag;
+	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
+	if (flag) {
+		assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
+		request->type = RECV_REQUEST_TYPE;
+	}else{
+		// no handshake present
+		request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
+	}
+
+	/*
 	int flag = 0;
 	while (!flag) {
 
@@ -612,12 +623,14 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 			e_recv(request);
 
 		} else {
+			//MPI_Iprobe(request->dest,request->tag,request->comm,&flag,MPI_STATUS_IGNORE);
 			MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
 			if (flag)
 				request->operation_number++;
+			//MPI_Recv(request->buf,request->size,MPI_BYTE,request->dest,request->tag,request->comm,MPI_STATUS_IGNORE);
 		}
 
-	}
+	}*/
 }
 
 static int MPIOPT_Wait_send_internal(MPIOPT_Request *request,
