@@ -141,20 +141,16 @@ static void add_to_list_of_incoming_msg(MPIOPT_Request *request, void *data) {
 
 	// enque in list
 
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-
-
 	if (request->list_of_pending_msgs == NULL) {
 #ifdef STATISTIC_PRINTING
-		printf("Rank %d: Recv msg, bufferd it\n",rank);
+		printf("Recv msg, bufferd it\n");
 #endif
 		request->list_of_pending_msgs = new_elem;
 	} else {
 		// traverse the list, we need to enqueue at the end to keep order
 #ifdef STATISTIC_PRINTING
 		printf(
-				"Rank %d: Need to enqueue into list of pending Msg, this may degrade performance\n",rank);
+				"Need to enqueue into list of pending Msg, this may degrade performance\n");
 #endif
 
 		void *cur_elem = request->list_of_pending_msgs;
@@ -183,9 +179,6 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 	MPIOPT_Request *request = (MPIOPT_Request*) arg;
 
 	assert(request->size == length && "Wrong message size");
-
-	int rank;
-	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
 
 	if (param->recv_attr & UCP_AM_RECV_ATTR_FLAG_RNDV) {
 #ifdef USE_EAGER
@@ -253,7 +246,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 
 	} else {
 #ifdef STATISTIC_PRINTING
-		printf(" Rank: %d Recv msg without the need of buffering it\n",rank);
+		printf("Recv msg without the need of buffering it\n");
 #endif
 		// recv is active, we can override the data buffer
 		//TODO atomic inrement for multi threading
