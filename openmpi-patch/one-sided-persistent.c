@@ -22,6 +22,7 @@
 #define USE_EAGER
 
 //#define USE_RENDEZVOUS
+//TODO proper use of 	request->is_ready_to_recv
 
 // use locking for multi threaded usage
 //#define USE_LOCKING
@@ -53,8 +54,8 @@ struct mpiopt_request {
 	void *buf;
 	size_t size;
 	// initialized locally
-	unsigned int operation_number;
 	int type;
+	bool is_ready_to_recv;
 	void *list_of_pending_msgs;
 	ucp_ep_h ep; // save used endpoint, so we dont have to look it up over and over
 	// necessary for backup in case no other persistent op matches
@@ -177,7 +178,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 		printf("Recv Rendezvous msg\n");
 #endif
 		assert(request->list_of_pending_msgs == NULL);
-		if (request->operation_number % 2 == 0) {
+		if (!request->is_ready_to_recv) {
 			//request is not active
 			request->list_of_pending_msgs = data;
 #ifdef STATISTIC_PRINTING
@@ -224,7 +225,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 #ifdef USE_LOCKING
 	pthread_mutex_lock(&request->mutex);
 #endif
-	if (request->operation_number % 2 == 0) {
+	if (!request->is_ready_to_recv) {
 		//request is not active
 		add_to_list_of_incoming_msg(request, data);
 
@@ -235,7 +236,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 		// recv is active, we can override the data buffer
 		// do not overtake another msg
 		assert(request->list_of_pending_msgs==NULL);
-		request->operation_number++;
+		request->is_ready_to_recv=false;
 		memcpy(request->buf, data, request->size);
 	}
 #ifdef USE_LOCKING
@@ -351,13 +352,13 @@ static void b_recv(MPIOPT_Request *request) {
 #ifdef USE_LOCKING
 	pthread_mutex_lock(&request->mutex);
 #endif
-	request->operation_number++;
 	// if there is a msg to receive: use it
-	if (request->list_of_pending_msgs!=NULL){
+	if (__builtin_expect(request->list_of_pending_msgs!=NULL,0)){
 		// this preserves correct msg order if the sender "overtakes"
 		dequeue_from_list_of_incoming_msg(request);
-		request->operation_number++;
 		//TODO does UCX actually preserve MSG ordering?
+	}else{
+		request->is_ready_to_recv=true;
 	}
 
 #ifdef USE_LOCKING
@@ -385,20 +386,20 @@ static void b_recv(MPIOPT_Request *request) {
 static void e_recv(MPIOPT_Request *request) {
 
 #ifdef USE_EAGER
-	if (__builtin_expect(request->operation_number % 2 != 0, 0)) {
+	if (__builtin_expect(request->is_ready_to_recv, 0)) {
 
 		// wait for msg to arrive if it hasnt already
-		while (__builtin_expect(request->operation_number % 2 != 0
+		while (__builtin_expect(	request->is_ready_to_recv
 				&& request->list_of_pending_msgs == NULL,0)) {
 			ucp_worker_progress(mca_osc_ucx_component.ucp_worker);
 		}
 
 		// receive msg from queue
-		if (__builtin_expect(request->operation_number % 2 != 0, 1)) {
+		if (__builtin_expect(	request->is_ready_to_recv, 1)) {
 #ifdef USE_LOCKING
 			pthread_mutex_lock(&request->mutex);
 #endif
-			request->operation_number++;
+			request->is_ready_to_recv=false;
 			dequeue_from_list_of_incoming_msg(request);
 #ifdef USE_LOCKING
 			pthread_mutex_unlock(&request->mutex);
@@ -467,7 +468,6 @@ static void send_rdma_info(MPIOPT_Request *request) {
 
 static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 
-assert(request->operation_number == 1);
 		// always post a normal msg, in case of fallback to normal comm is needed
 		// for the first time, the receiver will post a matching recv
 		assert(request->backup_request == MPI_REQUEST_NULL);
@@ -477,7 +477,6 @@ assert(request->operation_number == 1);
 }
 
 static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
-	assert(request->operation_number == 1);
 
 		MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
 				request->tag, request->comm, &request->backup_request);
@@ -489,7 +488,6 @@ static void start_recv_when_searching_for_connection(MPIOPT_Request *request) {
 static int MPIOPT_Start_send_internal(MPIOPT_Request *request) {
 
 	// TODO atomic increment for multi threading
-	request->operation_number++;
 
 	if (__builtin_expect(request->type == SEND_REQUEST_TYPE, 1)) {
 		b_send(request);
@@ -513,18 +511,13 @@ static int MPIOPT_Start_send_internal(MPIOPT_Request *request) {
 
 static int MPIOPT_Start_recv_internal(MPIOPT_Request *request) {
 
-	// TODO atomic increment for multi threading
-	//request->operation_number++;
-
 	if (__builtin_expect(request->type == RECV_REQUEST_TYPE, 1)) {
 		b_recv(request);
 
 	} else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
-		request->operation_number++;
 		start_recv_when_searching_for_connection(request);
 
 	} else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
-		request->operation_number++;
 		assert(request->backup_request == MPI_REQUEST_NULL);
 		MPI_Irecv(request->buf, request->size, MPI_BYTE, request->dest,
 				request->tag, request->comm, &request->backup_request);
@@ -568,7 +561,6 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 
 	// wait for either the handshake or the payload data to arrive
 	MPI_Wait(&request->backup_request,MPI_STATUS_IGNORE);
-	request->operation_number++;
 
 	int flag;
 	MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
@@ -598,9 +590,6 @@ static int MPIOPT_Wait_send_internal(MPIOPT_Request *request,
 		assert(false && "Error: uninitialized Request");
 	}
 
-	request->operation_number++;
-
-	assert(request->operation_number % 2 == 0);// request cannot be active
 }
 
 static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
@@ -614,12 +603,10 @@ static int MPIOPT_Wait_recv_internal(MPIOPT_Request *request,
 	} else if (request->type == RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION) {
 		wait_recv_when_searching_for_connection(request);
 	} else if (request->type == Recv_REQUEST_TYPE_USE_FALLBACK) {
-		request->operation_number++;
 		MPI_Wait(&request->backup_request, status);
 	} else {
 		assert(false && "Error: uninitialized Request");
 	}
-	assert(request->operation_number % 2 == 0);// request cannot be active
 
 #ifdef BUFFER_CONTENT_CHECKING
 	MPI_Wait(&request->chekcking_request, MPI_STATUS_IGNORE);
@@ -687,6 +674,7 @@ static int init_request(const void *buf, int count, MPI_Datatype datatype,
 			(ompi_osc_ucx_module_t*) global_comm_win->w_osc_module;
 	ucp_ep_h ep = OSC_UCX_GET_EP(module->comm, dest);
 
+	request->is_ready_to_recv=false;
 	request->ep = ep;
 	request->buf = buf;
 	request->dest = dest;
