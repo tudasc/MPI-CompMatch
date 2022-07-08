@@ -43,54 +43,44 @@ struct list_elem_ptr {
 	struct list_elem_int *next;
 };
 
+
 struct mpiopt_request {
 	// this way it it can be used as a normal request ptr as well
 	struct ompi_request_t original_request;
-	int flag;
-	int flag_buffer;
 	unsigned long AM_ID;
+    void *ucx_request_data_transfer;
+
 	void *buf;
 	size_t size;
 	// initialized locally
-	void *ucx_request_data_transfer;
-	void *ucx_request_flag_transfer;
 	unsigned int operation_number;
 	int type;
-	ucp_mem_h mem_handle_data;
-	ucp_mem_h mem_handle_flag;
-	ucp_am_handler_param_t am_handler;
-	ucp_request_param_t ucp_request_param;
 	void *list_of_pending_msgs;
 	ucp_ep_h ep; // save used endpoint, so we dont have to look it up over and over
 	// necessary for backup in case no other persistent op matches
 	MPI_Request backup_request;
+	ucp_am_handler_param_t am_handler;
+	ucp_request_param_t ucp_request_param;
 	int tag;
 	int dest;
 	MPI_Comm comm;
 	// MPI_Request rdma_exchange_request;
 	MPI_Request rdma_exchange_request;
-	void *rdma_info_buf;
 #ifdef USE_LOCKING
 	pthread_mutex_t mutex;
 #endif
-// struct mpiopt_request* rdma_exchange_buffer;
 #ifdef BUFFER_CONTENT_CHECKING
 	void *checking_buf;
 	MPI_Request chekcking_request;
 #endif
 };
-typedef struct mpiopt_request MPIOPT_Request;
 
-struct list_elem_int {
-	int value;
-	struct list_elem_int *next;
-};
+typedef struct mpiopt_request MPIOPT_Request;
 
 // globals
 // TODO refactor and have one struct for globals?
 MPI_Win global_comm_win;
 MPI_Comm handshake_communicator;
-MPI_Comm handshake_response_communicator;
 // we need a different comm here, so that send a handshake response (recv
 // handshake) cannot be mistaken for another handshake-request from a send with
 // the same tag
@@ -112,12 +102,7 @@ struct list_elem {
 };
 struct list_elem *request_list_head;
 
-// requests to free (defer free of some ressources until finalize, so that
-// request free is local operation)
-struct list_elem *to_free_list_head;
-// tell other rank, that it should post a matching receive for all unsuccessful
-// handshakes
-struct list_elem_int *msg_send;
+// ID for next active msg handler to use
 unsigned long AM_tag;
 
 static void b_send(MPIOPT_Request *request);
@@ -188,7 +173,6 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 		 * which has to be passed to ucp_am_recv_data_nbx function to confirm
 		 * data transfer.
 		 */
-		//TODO implement
 #ifdef STATISTIC_PRINTING
 		printf("Recv Rendezvous msg\n");
 #endif
@@ -236,7 +220,7 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 	 return UCS_INPROGRESS;
 	 }
 	 else{*/
-// WHY is this necessary and we cannot keep UCS's memory around?
+// why is this necessary and we cannot keep UCS's memory around?
 #ifdef USE_LOCKING
 	pthread_mutex_lock(&request->mutex);
 #endif
@@ -249,7 +233,6 @@ ucs_status_t incoming_am_msg_handler(void *arg, const void *header,
 		printf("Recv msg without the need of buffering it\n");
 #endif
 		// recv is active, we can override the data buffer
-		//TODO atomic inrement for multi threading
 		// do not overtake another msg
 		assert(request->list_of_pending_msgs==NULL);
 		request->operation_number++;
@@ -482,17 +465,6 @@ static void send_rdma_info(MPIOPT_Request *request) {
 
 }
 
-static void receive_rdma_info(MPIOPT_Request *request) {
-
-	assert(
-			request->type == SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION
-					|| request->type
-							== RECV_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION);
-
-	// nothing to do
-
-}
-
 static void start_send_when_searching_for_connection(MPIOPT_Request *request) {
 
 assert(request->operation_number == 1);
@@ -608,27 +580,6 @@ static void wait_recv_when_searching_for_connection(MPIOPT_Request *request) {
 		request->type = Recv_REQUEST_TYPE_USE_FALLBACK;
 	}
 
-	/*
-	int flag = 0;
-	while (!flag) {
-
-		MPI_Test(&request->rdma_exchange_request, &flag, MPI_STATUS_IGNORE);
-		if (flag) {
-			// handshake successful
-			assert(request->rdma_exchange_request == MPI_REQUEST_NULL);
-			request->type = RECV_REQUEST_TYPE;
-			b_recv(request);
-			e_recv(request);
-
-		} else {
-			//MPI_Iprobe(request->dest,request->tag,request->comm,&flag,MPI_STATUS_IGNORE);
-			MPI_Test(&request->backup_request, &flag, MPI_STATUS_IGNORE);
-			if (flag)
-				request->operation_number++;
-			//MPI_Recv(request->buf,request->size,MPI_BYTE,request->dest,request->tag,request->comm,MPI_STATUS_IGNORE);
-		}
-
-	}*/
 }
 
 static int MPIOPT_Wait_send_internal(MPIOPT_Request *request,
@@ -842,22 +793,16 @@ void MPIOPT_INIT() {
 	request_list_head = malloc(sizeof(struct list_elem));
 	request_list_head->elem = NULL;
 	request_list_head->next = NULL;
-	to_free_list_head = malloc(sizeof(struct list_elem));
-	to_free_list_head->elem = NULL;
-	to_free_list_head->next = NULL;
 
 	AM_tag = 1;
 
 	MPI_Comm_dup(MPI_COMM_WORLD, &handshake_communicator);
-	MPI_Comm_dup(MPI_COMM_WORLD, &handshake_response_communicator);
 #ifdef BUFFER_CONTENT_CHECKING
 	MPI_Comm_dup(MPI_COMM_WORLD, &checking_communicator);
 #endif
 }
 void MPIOPT_FINALIZE() {
 	MPI_Win_free(&global_comm_win);
-	assert(request_list_head->next == NULL); // list should be empty
-	free(request_list_head);
 
 #ifdef STATISTIC_PRINTING
 	int rank = 0;
@@ -867,33 +812,8 @@ void MPIOPT_FINALIZE() {
 
 	ucp_context_h context = mca_osc_ucx_component.ucp_context;
 
-	/*
-	 struct list_elem *elem = to_free_list_head;
-	 while (elem != NULL) {
-	 MPIOPT_Request *req = elem->elem;
-
-	 if (req != NULL) {
-	 free(req->rdma_info_buf);
-	 // release all RDMA ressources
-
-	 if (req->type == RECV_REQUEST_TYPE || req->type == SEND_REQUEST_TYPE) {
-	 // otherwise all these resources where never acquired
-	 ucp_mem_unmap(context, req->mem_handle_flag);
-	 ucp_rkey_destroy(req->remote_flag_rkey);
-
-	 // ucp_mem_unmap(context, req->mem_handle_data); // was freed before
-	 }
-	 free(req);
-	 }
-	 struct list_elem *nxt_elem = elem->next;
-	 free(elem);
-	 elem = nxt_elem;
-	 }
-	 */
-
-	// TODO receive all pending messages from unsuccessful handshakes
+	// TODO post receive for all pending messages from unsuccessful handshakes
 	MPI_Comm_free(&handshake_communicator);
-	MPI_Comm_free(&handshake_response_communicator);
 #ifdef BUFFER_CONTENT_CHECKING
 	MPI_Comm_free(&checking_communicator);
 #endif
