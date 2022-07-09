@@ -11,7 +11,8 @@ DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output//2"
 # DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output_inside"
 
 CACHE_FILE="cache.pkl"
-PLTSIZE=(18, 12)
+PLTSIZE=(12,4)
+PLTSIZE_BAR_PLT=(12,4)
 
 
 NORMAL = 1
@@ -23,16 +24,20 @@ names = {NORMAL: "NORMAL", EAGER: "EAGER", RENDEVOUZ1: "RENDEVOUZ1", RENDEVOUZ2:
 # color sceme by Paul Tol https://personal.sron.nl/~pault/
 colors = {NORMAL: "#4477AA", EAGER: "#EE6677", RENDEVOUZ1: "#AA3377", RENDEVOUZ2: "#228833"}
 
-buffer_sizes = [4, 8, 32, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216]
-nrows = 3
+buffer_sizes = [4,8,32,512,1024,4906,16384,165536,1048576,4194304,16777216]
+buffer_sizes = [4,8,32,512,1024,16384,1048576,4194304,16777216]
+buffer_sizes_with_full_plot = [1024,1048576]
+nrows = 1
+
+comptime_for_barplots=10000
 
 # limited set for faster measurement
 # buffer_sizes = [8,1024,16384,65536,262144,1048576,4194304,16777216]
 # buffer_sizes = [8,32,512,1024,16384]
-nrows = 2
+#nrows = 2
 
-upper = 95
-lower = 5
+upper = 90
+lower = 10
 
 
 def mean_percentile_range(array, upper, lower):
@@ -55,7 +60,7 @@ def mean_percentile_range(array, upper, lower):
 
 
 # get min, may, avg for specified buf_size
-def extract_data(data, buf_size):
+def extract_data_calctime(data, buf_size):
     x = []
     y_min = []
     y_max = []
@@ -81,8 +86,104 @@ def extract_data(data, buf_size):
 
     return x_sort, y_min_sort, y_max_sort, y_avg_sort
 
+def get_data_bufsize(data, buf_size,calctime):
 
-def get_plot(data, plot_name,scaling=True,fill=False,normal=True,eager=True,rendevouz1=True,rendevouz2=True):
+    y = []
+
+    # key is calctime, value the dict mapping bufsize and overhead
+
+    for mearsurement in data[calctime]:
+        if buf_size in mearsurement:
+            y.append(float(mearsurement[buf_size]))
+        # print (y)
+    y_min = np.percentile(y, lower)
+    y_max=np.percentile(y, upper)
+    y_avg=mean_percentile_range(y, upper, lower)
+
+    return y_min, y_max, y_avg
+
+def add_bar(x,data,key,buf_size,comp_time,show_in_legend=True):
+    min, max, avg = get_data_bufsize(data[key], buf_size, comp_time)
+    if show_in_legend:
+        label = names[key]
+    else:
+        label='_nolegend_'
+    plt.bar(x, avg, color=colors[key], yerr=[[min], [max]], align='edge',label=label)
+
+def get_bar_plot(data, buffer_sizes,comp_time,plot_name,scaling=True,fill=False,normal=True,eager=True,rendevouz1=True,rendevouz2=True):
+    ftsize = 16
+    plt.rcParams.update({'font.size': ftsize})
+    # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
+    figsz = PLTSIZE_BAR_PLT
+
+    num_bars=1# the space in between two different buffer length
+    if normal:
+        num_bars+=1
+    if eager:
+        num_bars+=1
+    if rendevouz1:
+        num_bars+=1
+    if rendevouz2:
+        num_bars+=1
+
+    y_pos= range(num_bars*len(buffer_sizes))
+
+    fig, ax = plt.subplots()
+
+    current_bar=0
+    show_in_legend=True;
+
+    x_tics_labels=[]
+    x_tics=[]
+    # reshape axis to have 1d-array we can iterate over
+    for buf_size in buffer_sizes:
+
+        x_tics.append(num_bars/2+current_bar)
+        if normal:
+            add_bar(current_bar, data, NORMAL, buf_size, comp_time,show_in_legend)
+            current_bar+=1
+        if eager:
+            add_bar(current_bar, data, EAGER, buf_size, comp_time,show_in_legend)
+            current_bar += 1
+        if rendevouz1:
+            add_bar(current_bar, data, RENDEVOUZ1, buf_size, comp_time,show_in_legend)
+            current_bar += 1
+        if rendevouz2:
+            add_bar(current_bar, data, RENDEVOUZ2, buf_size, comp_time,show_in_legend)
+            current_bar += 1
+        current_bar+=1
+        show_in_legend=False
+
+        if buf_size < 1024:
+            x_tics_labels.append("%d\nB" % buf_size)
+        elif buf_size < 1048576:
+            x_tics_labels.append("%d\nKiB" % (buf_size / 1024))
+        else:
+            x_tics_labels.append("%d\nMiB" % (buf_size / 1048576))
+
+
+    ax.set_xlabel("Buffer Size")
+    ax.set_ylabel("communication overhead in seconds")
+
+    # locator = plt.MaxNLocator(nbins=7)
+    # ax.xaxis.set_major_locator(locator)
+    #ax.locator_params(axis='x', tight=True, nbins=4)
+
+    ax.legend(loc='upper left')
+
+    #if scaling:
+    #    ax.set_ylim(0, max_y * 1.05)
+
+    # convert to seconds easy comparision with y axis
+
+    ax.set_xticks(x_tics)
+    ax.set_xticklabels(x_tics_labels)
+
+    #plt.tight_layout()
+    output_format = "pdf"
+    plt.savefig(plot_name + "." + output_format, bbox_inches='tight')
+
+def get_comp_time_plot(data, buffer_sizes,plot_name,scaling=True,fill=False,normal=True,eager=True,rendevouz1=True,rendevouz2=True):
     ftsize = 16
     plt.rcParams.update({'font.size': ftsize})
     # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
@@ -90,7 +191,12 @@ def get_plot(data, plot_name,scaling=True,fill=False,normal=True,eager=True,rend
 
     ncols = math.ceil(len(buffer_sizes) * 1.0 / nrows)
 
-    fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsz, sharex=True, sharey='row')
+    if nrows>1:
+        sharey='row'
+    else:
+        sharey=False
+
+    fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsz, sharex=True, sharey=sharey)
 
     # reshape axis to have 1d-array we can iterate over
     for ax, buf_size in zip(axs.reshape(-1), buffer_sizes):
@@ -130,16 +236,22 @@ def get_plot(data, plot_name,scaling=True,fill=False,normal=True,eager=True,rend
         labels = [0, 0.005, 0.01]
         ax.set_xticks(xtics)
         ax.set_xticklabels(labels)
-
-    plt.setp(axs[-1, :], xlabel='calculation time (s)')
-    plt.setp(axs[:, 0], ylabel='communication overhead (s)')
+    if nrows>1:
+        plt.setp(axs[-1, :], xlabel='calculation time (s)')
+        plt.setp(axs[:, 0], ylabel='communication overhead (s)')
+    else:
+        plt.setp(axs, xlabel='calculation time (s)')
+        plt.setp(axs[0], ylabel='communication overhead (s)')
+        plt.setp(axs[-1], ylabel='communication overhead (s)',)
+        axs[-1].yaxis.set_label_position('right')
+        axs[-1].yaxis.tick_right()
     plt.tight_layout()
     output_format = "pdf"
     plt.savefig(plot_name + "." + output_format, bbox_inches='tight')
 
 
 def add_line_plot(key,ax, buf_size, data, fill):
-    x, y_min, y_max, y_avg = extract_data(data[key], buf_size)
+    x, y_min, y_max, y_avg = extract_data_calctime(data[key], buf_size)
     max_y = np.max(y_max)  # axis scaling
     ax.plot(x, y_avg, label=names[key], color=colors[key])
     if (fill):
@@ -247,9 +359,11 @@ def main():
 
     print("generating plots ...")
 
-    get_plot(data, "overhead_scaled",scaling=True, fill=False)
-    get_plot(data, "overhead_scaled_filled",scaling=True, fill=True)
-    get_plot(data, "overhead",scaling=False, fill=False)
+    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled",scaling=True, fill=False)
+    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled_filled",scaling=True, fill=True)
+    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead",scaling=False, fill=False)
+
+    get_bar_plot(data, buffer_sizes, comptime_for_barplots,"overhead_bars")
 
     # get_plot(data_NOwarmup, True, "noWarmup_scaled")
     # get_plot(data_NOwarmup, False, "noWarmup")
