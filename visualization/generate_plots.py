@@ -3,27 +3,41 @@ import os
 import yaml
 import math
 import numpy as np
+import argparse
+import pickle
 
-DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output"
-#DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output"
-#DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output_inside"
+DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output//2"
+# DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output"
+# DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output_inside"
 
-ORIG = 1
-MODIFIED = 2
+CACHE_FILE="cache.pkl"
+PLTSIZE=(18, 12)
 
-#buffer_sizes = [4, 8, 32, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216]
-#nrows = 3
+
+NORMAL = 1
+EAGER = 2
+RENDEVOUZ1 = 3
+RENDEVOUZ2 = 4
+
+names = {NORMAL: "NORMAL", EAGER: "EAGER", RENDEVOUZ1: "RENDEVOUZ1", RENDEVOUZ2: "RENDEVOUZ2"}
+# color sceme by Paul Tol https://personal.sron.nl/~pault/
+colors = {NORMAL: "#4477AA", EAGER: "#EE6677", RENDEVOUZ1: "#AA3377", RENDEVOUZ2: "#228833"}
+
+buffer_sizes = [4, 8, 32, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216]
+nrows = 3
 
 # limited set for faster measurement
-buffer_sizes = [8,1024,16384,65536,262144,1048576,4194304,16777216]
+# buffer_sizes = [8,1024,16384,65536,262144,1048576,4194304,16777216]
+# buffer_sizes = [8,32,512,1024,16384]
 nrows = 2
 
-upper=95
-lower=5
+upper = 95
+lower = 5
 
-def mean_percentile_range(array,upper,lower):
+
+def mean_percentile_range(array, upper, lower):
     # from:
-    #https://stackoverflow.com/questions/61391138/numpy-mean-percentile-range-eg-mean-25th-to-50th-percentile
+    # https://stackoverflow.com/questions/61391138/numpy-mean-percentile-range-eg-mean-25th-to-50th-percentile
     # find the indexes of the element below 25th and 50th percentile
     idx_under_25 = np.argwhere(array < np.percentile(array, lower))
     idx_under_50 = np.argwhere(array <= np.percentile(array, upper))
@@ -50,14 +64,14 @@ def extract_data(data, buf_size):
     # key is calctime, value the dict mapping bufsize and overhead
     for calctime, value in data.items():
         x.append(float(calctime))
-        y=[]
+        y = []
         for mearsurement in value:
             if buf_size in mearsurement:
                 y.append(float(mearsurement[buf_size]))
-        #print (y)
-        y_min.append(np.percentile(y,lower))
-        y_max.append(np.percentile(y,upper))
-        y_avg.append(mean_percentile_range(y,upper,lower))
+        # print (y)
+        y_min.append(np.percentile(y, lower))
+        y_max.append(np.percentile(y, upper))
+        y_avg.append(mean_percentile_range(y, upper, lower))
 
     order = np.argsort(x)
     x_sort = np.array(x)[order]
@@ -68,11 +82,11 @@ def extract_data(data, buf_size):
     return x_sort, y_min_sort, y_max_sort, y_avg_sort
 
 
-def get_plot(data, scaling, name):
+def get_plot(data, plot_name,scaling=True,fill=False,normal=True,eager=True,rendevouz1=True,rendevouz2=True):
     ftsize = 16
     plt.rcParams.update({'font.size': ftsize})
     # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
-    figsz = (12, 12)
+    figsz = PLTSIZE
 
     ncols = math.ceil(len(buffer_sizes) * 1.0 / nrows)
 
@@ -93,23 +107,14 @@ def get_plot(data, scaling, name):
         # ax.set_ylabel("communication overhead in seconds")
 
         # get the data
-        x, y_min, y_max, y_avg = extract_data(data[ORIG],buf_size)
-
-        orig_avg_time=y_avg[-1]
-
-        max_y = np.max(y_max)# axis scaling
-
-        ax.plot(x, y_avg, label="original",color="blue")
-        ax.fill_between(x,y_min,y_max,facecolor="blue",alpha=0.5)
-
-        x, y_min, y_max, y_avg = extract_data(data[MODIFIED], buf_size)
-
-        modified_avg_time = y_avg[-1]
-
-        print("%d : Up to %f%% improvement (avg)" % (buf_size,100*(orig_avg_time-modified_avg_time)/orig_avg_time))
-
-        ax.plot(x, y_avg, label="modified",color="orange")
-        ax.fill_between(x,y_min,y_max,facecolor="orange",alpha=0.5)
+        if normal:
+            max_y = add_line_plot(NORMAL,ax, buf_size, data, fill)
+        if eager:
+            _ = add_line_plot(EAGER,ax, buf_size, data, fill)
+        if normal:
+            _ = add_line_plot(RENDEVOUZ1,ax, buf_size, data, fill)
+        if normal:
+            _ = add_line_plot(RENDEVOUZ2,ax, buf_size, data, fill)
 
         # locator = plt.MaxNLocator(nbins=7)
         # ax.xaxis.set_major_locator(locator)
@@ -121,7 +126,7 @@ def get_plot(data, scaling, name):
             ax.set_ylim(0, max_y * 1.05)
 
         # convert to seconds easy comparision with y axis
-        xtics=[0,5000,10000]
+        xtics = [0, 5000, 10000]
         labels = [0, 0.005, 0.01]
         ax.set_xticks(xtics)
         ax.set_xticklabels(labels)
@@ -130,18 +135,23 @@ def get_plot(data, scaling, name):
     plt.setp(axs[:, 0], ylabel='communication overhead (s)')
     plt.tight_layout()
     output_format = "pdf"
-    plt.savefig(name + "." + output_format, bbox_inches='tight')
+    plt.savefig(plot_name + "." + output_format, bbox_inches='tight')
 
 
-def main():
+def add_line_plot(key,ax, buf_size, data, fill):
+    x, y_min, y_max, y_avg = extract_data(data[key], buf_size)
+    max_y = np.max(y_max)  # axis scaling
+    ax.plot(x, y_avg, label=names[key], color=colors[key])
+    if (fill):
+        ax.fill_between(x, y_min, y_max, facecolor=colors[key], alpha=0.5)
+    return max_y
+
+
+def read_data():
     print("Read Data ...")
-    data_NOwarmup = {}
-    data_NOwarmup[ORIG] = {}
-    data_NOwarmup[MODIFIED] = {}
+    data_NOwarmup = {NORMAL: {}, EAGER: {}, RENDEVOUZ1: {}, RENDEVOUZ2: {}}
 
-    data = {}
-    data[ORIG] = {}
-    data[MODIFIED] = {}
+    data = {NORMAL: {}, EAGER: {}, RENDEVOUZ1: {}, RENDEVOUZ2: {}}
 
     # read input data
     with os.scandir(DATA_DIR) as dir:
@@ -149,10 +159,14 @@ def main():
             if entry.is_file():
                 # original or modified run
                 mode = -1
-                if "orig" in entry.name:
-                    mode = ORIG
-                elif "modified" in entry.name:
-                    mode = MODIFIED
+                if "normal" in entry.name:
+                    mode = NORMAL
+                elif "eager" in entry.name:
+                    mode = EAGER
+                elif "rendevouz1" in entry.name:
+                    mode = RENDEVOUZ1
+                elif "rendevouz2" in entry.name:
+                    mode = RENDEVOUZ2
                 else:
                     print("Error readig file:")
                     print(entry.name)
@@ -160,7 +174,7 @@ def main():
 
                 # get calctime
                 calctime = int(entry.name.split("_")[-1].split(".")[0])
-                #print(calctime)
+                # print(calctime)
 
                 # read data
                 run_data = {}
@@ -171,24 +185,74 @@ def main():
                         print(exc)
 
                 # only care about the overhead
-                run_data = run_data["async_persistentpt2pt"]["over_full"]
-
-                if "NOwarmup" in entry.name:
-                    if calctime not in data_NOwarmup[mode]:
-                        data_NOwarmup[mode][calctime] = []
-                    data_NOwarmup[mode][calctime].append(run_data)
-                else:
+                # if there is data available
+                if run_data is not None:
+                    run_data = run_data["async_persistentpt2pt"]["over_full"]
                     if calctime not in data[mode]:
                         data[mode][calctime] = []
                     data[mode][calctime].append(run_data)
 
+    return data, data_NOwarmup
+
+
+def print_stat(data, key, buf_size, base_val):
+    measurement_count = 0
+    sum = 0
+    values=[]
+    # only print stats for maximum comp time
+    comp_time = max(data[key],key=int)
+    for measurement in data[key][comp_time]:
+        if buf_size in measurement:
+            measurement_count += 1
+            values.append(float(measurement[buf_size]))
+
+    avg = 1
+
+    if measurement_count > 0:
+        avg = mean_percentile_range(values,upper,lower)
+        if base_val == -1:
+            print("%s: %d measurements, 0%% improvement (avg)" % (names[key], measurement_count))
+        else:
+            improvement = 100*(base_val-avg)/base_val
+            print("%s: %d measurements, %f%% improvement (avg)" % (names[key], measurement_count, improvement))
+    else:
+        print("%s: 0 measurements" % names[key])
+    return measurement_count, avg
+
+
+def print_statistics(data):
+    for buf_size in buffer_sizes:
+        print("")
+        print(buf_size)
+        measurement_count, avg = print_stat(data, NORMAL, buf_size, -1)
+        measurement_count, _ = print_stat(data, EAGER, buf_size, avg)
+        measurement_count, _ = print_stat(data, RENDEVOUZ1, buf_size, avg)
+        measurement_count, _ = print_stat(data, RENDEVOUZ2, buf_size, avg)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Generates Visualization')
+    parser.add_argument('--cache', help='use the content of the cache file named %s. do NOT set this argument, if you want to re-write the cache'%CACHE_FILE)
+    args = parser.parse_args()
+    if args.cache:
+        with open(CACHE_FILE, 'rb') as f:
+            data = pickle.load(f)
+    else:
+        data, data_NOwarmup = read_data()
+        with open(CACHE_FILE, 'wb') as f:
+            pickle.dump(data, f)
+
+
+    print_statistics(data)
+
     print("generating plots ...")
 
-    get_plot(data, True, "overhead_scaled")
-    get_plot(data, False, "overhead")
+    get_plot(data, "overhead_scaled",scaling=True, fill=False)
+    get_plot(data, "overhead_scaled_filled",scaling=True, fill=True)
+    get_plot(data, "overhead",scaling=False, fill=False)
 
-    get_plot(data_NOwarmup, True, "noWarmup_scaled")
-    get_plot(data_NOwarmup, False, "noWarmup")
+    # get_plot(data_NOwarmup, True, "noWarmup_scaled")
+    # get_plot(data_NOwarmup, False, "noWarmup")
 
     print("done")
 
