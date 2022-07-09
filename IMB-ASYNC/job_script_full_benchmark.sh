@@ -7,7 +7,7 @@
 #same as -t
 ###SBATCH --time 00:30:00
 # ~ a minute per benchmark, 4 benchmarks * 28 parameters
-# approx 2h but worst case a 3 mins per bencmakr, set runtime to 4 h
+# approx 2h
 #SBATCH --time 4:00:00
 
 #same as -c
@@ -56,6 +56,7 @@ export OMPI_MCA_pml=ucx
 export UCX_WARN_UNUSED_ENV_VARS=n
 export UCX_UNIFIED_MODE=y
 
+I=0
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:./home/tj75qeje/mpi-comp-match/IMB-ASYNC/src_cpp/ASYNC/thirdparty/lib/
 
 mkdir -p $OUTPATH
@@ -63,24 +64,26 @@ mkdir -p $OUTPATH
 # random parameterorder, to add random disturbance (e.g. the slurm controler will interrupt quite regularly)
 for PARAM in $(shuf /home/tj75qeje/mpi-comp-match/IMB-ASYNC/parameters.txt ) ; do
 
+((I=I+1))
+
 # get calctime out of param, as calctime will not be included inside the yml, we need to include it in the filename
 CALCTIME=$(echo $PARAM | cut -d' ' -f2)
 # original
 ml openmpi/normal
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/normal_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/normal_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/rendevouz1
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz1_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz1_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/rendevouz2
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz2_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz2_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/eager
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${PARAM}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 done
 echo "done"
