@@ -6,9 +6,9 @@
 #SBATCH --mem-per-cpu=3800
 #same as -t
 ###SBATCH --time 00:30:00
-# ~ a minute per benchmark, 4 benchmarks * 28 parameters
-# approx 2h - set time to 4h in case that some runs takes waay longer (may be possible if eager deadlocks with larger msg sizes)
-#SBATCH --time 4:00:00
+# approx half a minute per benchmark, 4 benchmarks * 28 parameters
+# approx 2h
+#SBATCH --time 2:00:00
 
 #same as -c
 #SBATCH --cpus-per-task 96
@@ -40,7 +40,7 @@ OUTPATH=/work/scratch/tj75qeje/mpi-comp-match/output/$SLURM_NPROCS
 # only the warmup phase
 #LEN2="-len 4,8,32,512,1024,4096,16384,65536,262144,1048576,4194304,16777216 -ncycles 64 -nwarmup 0 -datatype char "
 
-TIMEOUT_CMD="/usr/bin/timeout -k 180 180"
+TIMEOUT_CMD="/usr/bin/timeout -k 90 90"
 #here the jobscript starts
 #srun hostname
 
@@ -68,11 +68,15 @@ IFS_BAK=$IFS
 IFS=$'\n'
 for PARAM in $RAND_PARAMS; do
 
+# return delimiter to previous value
+IFS=$IFS_BAK
+IFS_BAK=
+
 ((I=I+1))
 
 # get calctime out of param, as calctime will not be included inside the yml, we need to include it in the filename
 CALCTIME=$(echo $PARAM | cut -d' ' -f2)
-# original
+
 ml openmpi/normal
 
 $TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/normal_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
@@ -88,6 +92,10 @@ $TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workloa
 ml openmpi/eager
 
 $TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+
+# change delimiter (IFS) to new line.
+IFS_BAK=$IFS
+IFS=$'\n'
 
 done 
 
