@@ -8,7 +8,7 @@
 ###SBATCH --time 00:30:00
 # approx half a minute per benchmark, 4 benchmarks * 28 parameters
 # approx 2h
-#SBATCH --time 2:00:00
+#SBATCH --time 0:30:00
 
 #same as -c
 #SBATCH --cpus-per-task 96
@@ -79,19 +79,19 @@ CALCTIME=$(echo $PARAM | cut -d' ' -f2)
 
 ml openmpi/normal
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/normal_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/normal_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/rendevouz1
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz1_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz1_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/rendevouz2
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz2_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/rendevouz2_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 ml openmpi/eager
 
-$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC_orig async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 256 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 
 # change delimiter (IFS) to new line.
 IFS_BAK=$IFS
