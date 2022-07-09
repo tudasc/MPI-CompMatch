@@ -1,8 +1,28 @@
-5
-500
-1000
-2000
-4000
-6000
-8000
-10000
+-calctime 10000 -len 4
+-calctime 10000 -len 8
+-calctime 10000 -len 32
+-calctime 10000 -len 512
+-calctime 10000 -len 1024
+-calctime 10000 -len 4096
+-calctime 10000 -len 16384
+-calctime 10000 -len 65536
+-calctime 10000 -len 262144
+-calctime 10000 -len 1048576
+-calctime 10000 -len 4194304
+-calctime 10000 -len 16777216
+-calctime 10000 -len 1024
+-calctime 10000 -len 1048576
+-calctime 8000 -len 1024
+-calctime 8000 -len 1048576
+-calctime 6000 -len 1024
+-calctime 6000 -len 1048576
+-calctime 4000 -len 1024
+-calctime 4000 -len 1048576
+-calctime 2000 -len 1024
+-calctime 2000 -len 1048576
+-calctime 1000 -len 1024
+-calctime 1000 -len 1048576
+-calctime 500 -len 1024
+-calctime 500 -len 1048576
+-calctime 5 -len 1024
+-calctime 5 -len 1048576
