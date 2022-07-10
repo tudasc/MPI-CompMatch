@@ -12,11 +12,18 @@
 #include "ompi/mca/osc/ucx/osc_ucx.h"
 #include "ompi/mca/osc/ucx/osc_ucx_request.h"
 
+#include <unistd.h>
+#include <stdlib.h>
+
 // config :
 #define RDMA_SPIN_WAIT_THRESHOLD 32
 
 //#define STATISTIC_PRINTING
+#define SUMMARY_STATISTIC_PRINTING
 //#define BUFFER_CONTENT_CHECKING
+
+//#define DISTORT_PROCESS_ORDER_ON_CROSSTALK
+
 
 // end config
 
@@ -78,6 +85,9 @@ MPI_Comm handshake_response_communicator;
 // the same tag
 #ifdef BUFFER_CONTENT_CHECKING
 MPI_Comm checking_communicator;
+#endif
+#ifdef SUMMARY_STATISTIC_PRINTING
+unsigned int crosstalk_counter;
 #endif
 
 int dummy_int = 0;
@@ -430,6 +440,15 @@ static void e_recv(MPIOPT_Request *request) {
       wait_for_completion_blocking(request->ucx_request_data_transfer);
       request->ucx_request_data_transfer = NULL;
     }
+#ifdef DISTORT_PROCESS_ORDER_ON_CROSSTALK
+    // distort process order, so that crosstalk is unlikely to happen again
+    // the larger the msg, the more important that processes are apart and no crosstalk takes place
+    usleep(rand()%(request->size));
+
+#endif
+#ifdef SUMMARY_STATISTIC_PRINTING
+    crosstalk_counter++;
+#endif
 
   } // else: nothing to do, the op has finished
 }
@@ -999,6 +1018,9 @@ void MPIOPT_INIT() {
   to_free_list_head->elem = NULL;
   to_free_list_head->next = NULL;
 
+#ifdef SUMMARY_STATISTIC_PRINTING
+  crosstalk_counter=0;
+#endif
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_communicator);
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_response_communicator);
 #ifdef BUFFER_CONTENT_CHECKING
@@ -1039,6 +1061,9 @@ void MPIOPT_FINALIZE() {
     free(elem);
     elem = nxt_elem;
   }
+#ifdef SUMMARY_STATISTIC_PRINTING
+  printf("Crosstalk_counter= %d\n",crosstalk_counter);
+#endif
 
   // TODO receive all pending messages from unsuccessful handshakes
 
