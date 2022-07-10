@@ -53,6 +53,7 @@ goods and services.
 #include <unistd.h>
 #include <climits>
 #include <math.h>
+#include <cmath>
 
 #if 1
 namespace sys {
@@ -426,6 +427,7 @@ namespace async_suite {
             tover_calc = total_tover_calc / ncycles;
         } 
         MPI_Barrier(MPI_COMM_WORLD);
+        std::cout<< ctime <<"\n";
         results[count] = result { true, time, time - ctime + tover_comm, tover_calc, ncycles };
         return true;
     }
@@ -438,6 +440,10 @@ namespace async_suite {
         bool AsyncBenchmark_persistentpt2pt::benchmark(int orig_count, MPI_Datatype orig_datatype, int nwarmup, int ncycles, double &time, double &tover_comm, double &tover_calc) {
             if (!is_rank_active) {
                 MPI_Barrier(MPI_COMM_WORLD);
+                double ctime=0;
+                MPI_Allreduce(MPI_IN_PLACE, &ctime, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+                int valid =1;
+                MPI_Allreduce(MPI_IN_PLACE,&valid, 1, MPI_INT, MPI_BAND, MPI_COMM_WORLD);
                 return false;
             }
             size_t b = (size_t)orig_count * (size_t)dtsize;
@@ -462,8 +468,9 @@ namespace async_suite {
 
 
                     if (i == nwarmup) t1 = MPI_Wtime();
-MPI_Start(&request_s);
-MPI_Start(&request_r);
+                    MPI_Start(&request_r);
+                    MPI_Start(&request_s);
+
                     calc.benchmark(count, datatype, 0, 1, local_ctime, local_tover_comm, local_tover_calc);
                     if (i >= nwarmup) {
                         total_ctime += local_ctime;
@@ -509,7 +516,24 @@ MPI_Start(&request_r);
                 MPI_Request_free(&request_r);
             }
             MPI_Barrier(MPI_COMM_WORLD);
-            results[count] = result { true, time, time - ctime + tover_comm, tover_calc, ncycles };
+            std::cout<< ctime <<"\n";
+
+            double max_ctime;
+            MPI_Allreduce(&ctime,&max_ctime, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+            // discard result if there is a large difference in calctime
+            double diff = std::abs(max_ctime-ctime);
+            int valid=1;
+            // max 10% different calc-times
+            if (diff>0.1*max_ctime){
+            	// one could also just check if(ctime < 0.9*max_ctime)
+            	valid=0;
+            	std::cout << "WARNING: SUSPICIOUSLY LARGE DIFFERENCE IN CALCULATION TIMINGS, discarding this run\n";
+            }
+            // ONLY TAKE RESULT, IF ALL ARE VALID
+            MPI_Allreduce(MPI_IN_PLACE,&valid, 1, MPI_INT, MPI_BAND, MPI_COMM_WORLD);
+
+            results[count] = result { (valid>0), time, time - ctime + tover_comm, tover_calc, ncycles };
             return true;
         }
 
