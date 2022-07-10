@@ -48,7 +48,7 @@ def mean_percentile_range(array, upper, lower):
     # find the indexes of the element below 25th and 50th percentile
     idx_under_25 = np.argwhere(array < np.percentile(array, lower))
     idx_under_50 = np.argwhere(array <= np.percentile(array, upper))
-    # the alues for 25 and 50 are both included
+    # the values for 25 and 50 are both included
 
     # find the number of the elements in between 25th and 50th percentile
     diff_num = len(idx_under_50) - len(idx_under_25)
@@ -102,20 +102,27 @@ def get_data_bufsize(data, buf_size, calctime):
     y_max = np.percentile(y, upper)
     y_avg = mean_percentile_range(y, upper, lower)
 
-    return y_min, y_max, y_avg, y
+    y= [yy for yy in y if yy>=y_min and yy<=y_max]
+    y_median=np.median(y)
+
+    return y_min, y_max, y_avg,y_median, y
 
 
 def add_bar(x, data, key, buf_size, comp_time, show_in_legend=True):
-    min, max, avg, _ = get_data_bufsize(data[key], buf_size, comp_time)
+    min, max, avg,median, _ = get_data_bufsize(data[key], buf_size, comp_time)
     if show_in_legend:
         label = names[key]
     else:
         label = '_nolegend_'
-    plt.bar(x, avg, color=colors[key], yerr=[[min], [max]], align='edge', label=label)
+    container = plt.bar(x, avg, color=colors[key], yerr=[[min], [max]], align='edge', label=label)
+    connector, caplines, (vertical_lines,) = container.errorbar.lines
+    vertical_lines.set_color(colors[key])
+    # add a line showing the medial
+    plt.hlines(median,x,x+1,colors="black")
 
 
 def add_violin(x, data, key, buf_size, comp_time, show_in_legend=True):
-    _, _, _, y = get_data_bufsize(data[key], buf_size, comp_time)
+    _, _, _, _,y = get_data_bufsize(data[key], buf_size, comp_time)
 
     violin_parts = plt.violinplot([y], [x], quantiles=[lower / 100, upper / 100], showmeans=True,showextrema=False)
     for pc in violin_parts['bodies']:
