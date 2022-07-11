@@ -17,7 +17,7 @@
 ###SBATCH --array 0-1
 ###SBATCH --array 1-20
 # 100 runs for each parameter
-#SBATCH --array 1-200
+#SBATCH --array 1-1040
 ###SBATCH --array 0-10
 
 #same as -j
