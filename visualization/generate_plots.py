@@ -7,10 +7,9 @@ import numpy as np
 import argparse
 import pickle
 
-DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/2"
-#DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/inside_"
-# DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output"
-# DATA_DIR = "/home/tj75qeje/mpi-comp-match/IMB-ASYNC/output_inside"
+# DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/2"
+DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2"
+# DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_no_warmup"
 
 CACHE_FILE = "cache.pkl"
 PLTSIZE = (12, 4)
@@ -27,7 +26,8 @@ names = {NORMAL: "NORMAL", EAGER: "EAGER", RENDEVOUZ1: "RENDEVOUZ1", RENDEVOUZ2:
 colors = {NORMAL: "#4477AA", EAGER: "#EE6677", RENDEVOUZ1: "#AA3377", RENDEVOUZ2: "#228833"}
 
 buffer_sizes = [4, 8, 32, 512, 1024, 4906, 16384, 165536, 1048576, 4194304, 16777216]
-buffer_sizes = [4, 8, 32, 512, 1024, 16384, 1048576, 4194304, 16777216]
+# buffer_sizes = [4, 8, 32, 512, 1024, 16384, 1048576, 4194304, 16777216]
+# buffer_sizes = [512,4194304,16777216]
 buffer_sizes_with_full_plot = [1024, 1048576]
 nrows = 1
 
@@ -38,8 +38,8 @@ comptime_for_barplots = 10000
 # buffer_sizes = [8,32,512,1024,16384]
 # nrows = 2
 
-upper = 90
-lower = 10
+upper = 100
+lower = 0
 
 
 def mean_percentile_range(array, upper, lower):
@@ -98,46 +98,51 @@ def get_data_bufsize(data, buf_size, calctime):
         if buf_size in mearsurement:
             y.append(float(mearsurement[buf_size]))
         # print (y)
+    if not y:
+        # empty
+        return 0, 0, 0, 0, [0]
     y_min = np.percentile(y, lower)
     y_max = np.percentile(y, upper)
     y_avg = mean_percentile_range(y, upper, lower)
 
-    y= [yy for yy in y if yy>=y_min and yy<=y_max]
-    y_median=np.median(y)
+    y = [yy for yy in y if yy >= y_min and yy <= y_max]
+    y_median = np.median(y)
 
-    return y_min, y_max, y_avg,y_median, y
+    return y_min, y_max, y_avg, y_median, y
 
 
-def add_bar(x, data, key, buf_size, comp_time, show_in_legend=True):
-    min, max, avg,median, _ = get_data_bufsize(data[key], buf_size, comp_time)
+def add_bar(ax,x, data, key, buf_size, comp_time, show_in_legend=True):
+    min, max, avg, median, _ = get_data_bufsize(data[key], buf_size, comp_time)
     if show_in_legend:
         label = names[key]
     else:
         label = '_nolegend_'
-    container = plt.bar(x, avg, color=colors[key], yerr=[[min], [max]], align='edge', label=label)
+    container = ax.bar(x, avg, color=colors[key], yerr=[[min], [max]], align='edge', label=label)
     connector, caplines, (vertical_lines,) = container.errorbar.lines
     vertical_lines.set_color(colors[key])
     # add a line showing the medial
-    plt.hlines(median,x,x+1,colors="black")
+    ax.hlines(median, x, x + 1, colors="black")
+    return max
 
 
-def add_violin(x, data, key, buf_size, comp_time, show_in_legend=True):
-    _, _, _, _,y = get_data_bufsize(data[key], buf_size, comp_time)
+def add_violin(ax,x, data, key, buf_size, comp_time, show_in_legend=True):
+    _, max, _, _, y = get_data_bufsize(data[key], buf_size, comp_time)
 
-    violin_parts = plt.violinplot([y], [x], quantiles=[lower / 100, upper / 100], showmeans=True,showextrema=False)
+    violin_parts = ax.violinplot([y], [x*2], widths=[1.5], quantiles=[lower / 100, upper / 100], showmeans=True,showmedians=True, showextrema=False)
     for pc in violin_parts['bodies']:
         pc.set_color(colors[key])
-    if show_in_legend:
-        return (mpatches.Patch(color=colors[key]), names[key])
+
+    return (mpatches.Patch(color=colors[key]), names[key]), max
 
 
 def get_bar_plot(data, buffer_sizes, comp_time, plot_name, scaling=True, fill=False, normal=True, eager=True,
-                 rendevouz1=True, rendevouz2=True):
+                 rendevouz1=True, rendevouz2=True, scaling_key=NORMAL,split_point=5):
     ftsize = 16
     plt.rcParams.update({'font.size': ftsize})
     # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
     figsz = PLTSIZE_BAR_PLT
 
+    local_split_point=split_point
     num_bars = 1  # the space in between two different buffer length
     if normal:
         num_bars += 1
@@ -149,64 +154,89 @@ def get_bar_plot(data, buffer_sizes, comp_time, plot_name, scaling=True, fill=Fa
         num_bars += 1
 
     y_pos = range(num_bars * len(buffer_sizes))
+    y_scale = 0
 
-    fig, ax = plt.subplots()
+    fig, axs = plt.subplots(nrows=1, ncols=2, figsize=figsz, sharex=False, sharey=False)
 
     current_bar = 0
     show_in_legend = True;
 
-    x_tics_labels = []
-    x_tics = []
-    # reshape axis to have 1d-array we can iterate over
-    for buf_size in buffer_sizes:
 
-        x_tics.append(num_bars / 2 + current_bar)
-        if normal:
-            add_bar(current_bar, data, NORMAL, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-        if eager:
-            add_bar(current_bar, data, EAGER, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-        if rendevouz1:
-            add_bar(current_bar, data, RENDEVOUZ1, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-        if rendevouz2:
-            add_bar(current_bar, data, RENDEVOUZ2, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-        current_bar += 1
-        show_in_legend = False
+    i=0
+    for ax in axs:
+        x_tics_labels = []
+        x_tics = []
+        # reshape axis to have 1d-array we can iterate over
+        while i < len(buffer_sizes):
+            if current_bar >= local_split_point * num_bars:
+                local_split_point = len(buffer_sizes)
+                show_in_legend=True
+                break
 
-        if buf_size < 1024:
-            x_tics_labels.append("%d\nB" % buf_size)
-        elif buf_size < 1048576:
-            x_tics_labels.append("%d\nKiB" % (buf_size / 1024))
+            buf_size=buffer_sizes[i]
+            i+=1
+
+            x_tics.append(num_bars / 2 + current_bar)
+            if eager:
+                max_y = add_bar(ax,current_bar, data, EAGER, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if scaling_key == EAGER:
+                    y_scale = max(max_y, y_scale)
+            if rendevouz1:
+                max_y = add_bar(ax,current_bar, data, RENDEVOUZ1, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if scaling_key == RENDEVOUZ1:
+                    y_scale = max(max_y, y_scale)
+            if rendevouz2:
+                max_y = add_bar(ax,current_bar, data, RENDEVOUZ2, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if scaling_key == RENDEVOUZ2:
+                    y_scale = max(max_y, y_scale)
+            if normal:
+                max_y = add_bar(ax,current_bar, data, NORMAL, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if scaling_key == NORMAL:
+                    y_scale = max(max_y, y_scale)
+
+            current_bar += 1
+            show_in_legend = False
+
+            if buf_size < 1024:
+                x_tics_labels.append("%d\nB" % buf_size)
+            elif buf_size < 1048576:
+                x_tics_labels.append("%d\nKiB" % (buf_size / 1024))
+            else:
+                x_tics_labels.append("%d\nMiB" % (buf_size / 1048576))
+
+        ax.set_xlabel("Buffer Size")
+        if ax == axs[0]:
+            ax.set_ylabel("communication overhead in seconds")
         else:
-            x_tics_labels.append("%d\nMiB" % (buf_size / 1048576))
+            ax.yaxis.tick_right()
 
-    ax.set_xlabel("Buffer Size")
-    ax.set_ylabel("communication overhead in seconds")
+        # locator = plt.MaxNLocator(nbins=7)
+        # ax.xaxis.set_major_locator(locator)
+        # ax.locator_params(axis='x', tight=True, nbins=4)
 
-    # locator = plt.MaxNLocator(nbins=7)
-    # ax.xaxis.set_major_locator(locator)
-    # ax.locator_params(axis='x', tight=True, nbins=4)
+        if ax==axs[1]:
+            ax.legend(loc='upper left')
 
-    ax.legend(loc='upper left')
+        if scaling:
+            ax.set_ylim(0, y_scale * 1.05)
 
-    # if scaling:
-    #    ax.set_ylim(0, max_y * 1.05)
+        # convert to seconds easy comparision with y axis
 
-    # convert to seconds easy comparision with y axis
+        ax.set_xticks(x_tics)
+        ax.set_xticklabels(x_tics_labels)
 
-    ax.set_xticks(x_tics)
-    ax.set_xticklabels(x_tics_labels)
-
+    plt.tight_layout()
     # plt.tight_layout()
     output_format = "pdf"
     plt.savefig(plot_name + "." + output_format, bbox_inches='tight')
 
 
 def get_violin_plot(data, buffer_sizes, comp_time, plot_name, scaling=True, fill=False, normal=True, eager=True,
-                    rendevouz1=True, rendevouz2=True):
+                    rendevouz1=True, rendevouz2=True, scaling_key=NORMAL,split_point=5):
     ftsize = 16
     plt.rcParams.update({'font.size': ftsize})
     # plt.rcParams.update({'font.size': 18, 'hatch.linewidth': 0.0075})
@@ -222,68 +252,88 @@ def get_violin_plot(data, buffer_sizes, comp_time, plot_name, scaling=True, fill
     if rendevouz2:
         num_violins += 1
 
-    y_pos = range(num_violins * len(buffer_sizes))
+    y_pos = range(num_violins *2* len(buffer_sizes))
+    y_scale =0
 
-    fig, ax = plt.subplots()
+    fig, axs = plt.subplots(nrows=1, ncols=2, figsize=figsz, sharex=False, sharey=False)
+    local_split_point=split_point
 
     current_bar = 0
-    show_in_legend = True;
+    show_in_legend = True
+    i = 0
+    for ax in axs:
+        legend_labels = []
+        x_tics_labels = []
+        x_tics = []
+        # reshape axis to have 1d-array we can iterate over
+        while i < len(buffer_sizes):
+            if current_bar >= local_split_point * num_violins:
+                local_split_point = len(buffer_sizes)
+                show_in_legend = True
+                break
 
-    legend_labels=[]
-    x_tics_labels = []
-    x_tics = []
-    # reshape axis to have 1d-array we can iterate over
-    for buf_size in buffer_sizes:
+            buf_size = buffer_sizes[i]
+            i += 1
+            x_tics.append(num_violins / 2 + current_bar*2)
+            if eager:
+                label,max_y = add_violin(ax,current_bar, data, EAGER, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if show_in_legend:
+                    legend_labels.append(label)
+                if scaling_key == EAGER:
+                    y_scale = max(max_y, y_scale)
+            if rendevouz1:
+                label,max_y = add_violin(ax,current_bar, data, RENDEVOUZ1, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if show_in_legend:
+                    legend_labels.append(label)
+                if scaling_key == RENDEVOUZ1:
+                    y_scale = max(max_y, y_scale)
+            if rendevouz2:
+                label,max_y = add_violin(ax,current_bar, data, RENDEVOUZ2, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if show_in_legend:
+                    legend_labels.append(label)
+                if scaling_key == RENDEVOUZ2:
+                    y_scale = max(max_y, y_scale)
+            if normal:
+                label,max_y = add_violin(ax,current_bar, data, NORMAL, buf_size, comp_time, show_in_legend)
+                current_bar += 1
+                if show_in_legend:
+                    legend_labels.append(label)
+                if scaling_key == NORMAL:
+                    y_scale = max(max_y, y_scale)
+            current_bar += 1
+            show_in_legend = False
 
-        x_tics.append(num_violins / 2 + current_bar)
-        if normal:
-            label=add_violin(current_bar, data, NORMAL, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-            if show_in_legend:
-                legend_labels.append(label)
-        if eager:
-            label=add_violin(current_bar, data, EAGER, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-            if show_in_legend:
-                legend_labels.append(label)
-        if rendevouz1:
-            label=add_violin(current_bar, data, RENDEVOUZ1, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-            if show_in_legend:
-                legend_labels.append(label)
-        if rendevouz2:
-            label=add_violin(current_bar, data, RENDEVOUZ2, buf_size, comp_time, show_in_legend)
-            current_bar += 1
-            if show_in_legend:
-                legend_labels.append(label)
-        current_bar += 1
-        show_in_legend = False
+            if buf_size < 1024:
+                x_tics_labels.append("%d\nB" % buf_size)
+            elif buf_size < 1048576:
+                x_tics_labels.append("%d\nKiB" % (buf_size / 1024))
+            else:
+                x_tics_labels.append("%d\nMiB" % (buf_size / 1048576))
 
-        if buf_size < 1024:
-            x_tics_labels.append("%d\nB" % buf_size)
-        elif buf_size < 1048576:
-            x_tics_labels.append("%d\nKiB" % (buf_size / 1024))
+        ax.set_xlabel("Buffer Size")
+        if ax == axs[0]:
+            ax.set_ylabel("communication overhead in seconds")
         else:
-            x_tics_labels.append("%d\nMiB" % (buf_size / 1048576))
+            ax.yaxis.tick_right()
 
-    ax.set_xlabel("Buffer Size")
-    ax.set_ylabel("communication overhead in seconds")
+        # locator = plt.MaxNLocator(nbins=7)
+        # ax.xaxis.set_major_locator(locator)
+        # ax.locator_params(axis='x', tight=True, nbins=4)
+        if ax == axs[1]:
+            ax.legend(*zip(*legend_labels), loc='upper left')
 
-    # locator = plt.MaxNLocator(nbins=7)
-    # ax.xaxis.set_major_locator(locator)
-    # ax.locator_params(axis='x', tight=True, nbins=4)
+        if scaling:
+           ax.set_ylim(0, y_scale * 1.05)
 
-    ax.legend(*zip(*legend_labels),loc='upper left')
+        # convert to seconds easy comparision with y axis
 
-    # if scaling:
-    #    ax.set_ylim(0, max_y * 1.05)
+        ax.set_xticks(x_tics)
+        ax.set_xticklabels(x_tics_labels)
 
-    # convert to seconds easy comparision with y axis
-
-    ax.set_xticks(x_tics)
-    ax.set_xticklabels(x_tics_labels)
-
-    # plt.tight_layout()
+    plt.tight_layout()
     output_format = "pdf"
     plt.savefig(plot_name + "." + output_format, bbox_inches='tight')
 
@@ -375,40 +425,44 @@ def read_data():
     with os.scandir(DATA_DIR) as dir:
         for entry in dir:
             if entry.is_file():
-                # original or modified run
-                mode = -1
-                if "normal" in entry.name:
-                    mode = NORMAL
-                elif "eager" in entry.name:
-                    mode = EAGER
-                elif "rendevouz1" in entry.name:
-                    mode = RENDEVOUZ1
-                elif "rendevouz2" in entry.name:
-                    mode = RENDEVOUZ2
-                else:
-                    print("Error readig file:")
-                    print(entry.name)
-                    exit(-1)
 
-                # get calctime
-                calctime = int(entry.name.split("_")[-1].split(".")[0])
-                # print(calctime)
+                try:
+                    # original or modified run
+                    mode = -1
+                    if "normal" in entry.name:
+                        mode = NORMAL
+                    elif "eager" in entry.name:
+                        mode = EAGER
+                    elif "rendevouz1" in entry.name:
+                        mode = RENDEVOUZ1
+                    elif "rendevouz2" in entry.name:
+                        mode = RENDEVOUZ2
+                    else:
+                        print("Error readig file:")
+                        print(entry.name)
+                        exit(-1)
 
-                # read data
-                run_data = {}
-                with open(DATA_DIR + "/" + entry.name, "r") as stream:
-                    try:
-                        run_data = yaml.safe_load(stream)
-                    except yaml.YAMLError as exc:
-                        print(exc)
+                    # get calctime
+                    calctime = int(entry.name.split("_")[-1].split(".")[0])
+                    # print(calctime)
 
-                # only care about the overhead
-                # if there is data available
-                if run_data is not None:
-                    run_data = run_data["async_persistentpt2pt"]["over_full"]
-                    if calctime not in data[mode]:
-                        data[mode][calctime] = []
-                    data[mode][calctime].append(run_data)
+                    # read data
+                    run_data = {}
+                    with open(DATA_DIR + "/" + entry.name, "r") as stream:
+                        try:
+                            run_data = yaml.safe_load(stream)
+                        except yaml.YAMLError as exc:
+                            print(exc)
+
+                    # only care about the overhead
+                    # if there is data available
+                    if run_data is not None:
+                        run_data = run_data["async_persistentpt2pt"]["over_full"]
+                        if calctime not in data[mode]:
+                            data[mode][calctime] = []
+                        data[mode][calctime].append(run_data)
+                except ValueError:
+                    print("could not read %s" % entry.name)
 
     return data, data_NOwarmup
 
@@ -433,8 +487,11 @@ def print_stat(data, key, buf_size, base_val):
         else:
             improvement = 100 * (base_val - avg) / base_val
             print("%s: %d measurements, %f%% improvement (avg)" % (names[key], measurement_count, improvement))
+
+
     else:
         print("%s: 0 measurements" % names[key])
+
     return measurement_count, avg
 
 
@@ -465,12 +522,14 @@ def main():
 
     print("generating plots ...")
 
-    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled",scaling=True, fill=False)
-    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled_filled",scaling=True, fill=True)
-    get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead",scaling=False, fill=False)
+    # get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled",scaling=True, fill=False,eager=False)
+    # get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead_scaled_filled",scaling=True, fill=True,eager=False)
+    # get_comp_time_plot(data, buffer_sizes_with_full_plot,"overhead",scaling=False, fill=False,eager=False)
 
-    get_bar_plot(data, buffer_sizes, comptime_for_barplots,"overhead_bars")
+    get_bar_plot(data, buffer_sizes, comptime_for_barplots, "overhead_bars")
+    get_bar_plot(data, buffer_sizes, comptime_for_barplots, "overhead_bars_scaled", scaling=True)
     get_violin_plot(data, buffer_sizes, comptime_for_barplots, "overhead_violins")
+    get_violin_plot(data, buffer_sizes, comptime_for_barplots, "overhead_violins_scaled", scaling=True)
 
     # get_plot(data_NOwarmup, True, "noWarmup_scaled")
     # get_plot(data_NOwarmup, False, "noWarmup")
