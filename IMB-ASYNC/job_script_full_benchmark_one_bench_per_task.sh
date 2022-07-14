@@ -16,8 +16,8 @@
 
 ###SBATCH --array 0-1
 ###SBATCH --array 1-20
-# 100 runs for each parameter
-#SBATCH --array 1-1040
+# 1 run for each parameter
+#SBATCH --array 1-104
 ###SBATCH --array 0-10
 
 #same as -j
@@ -28,7 +28,7 @@
 ####SBATCH --output /dev/null
 
 # config
-OUTPATH=/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_$SLURM_NPROCS
+OUTPATH=/work/scratch/tj75qeje/mpi-comp-match/output/measurement_$SLURM_NPROCS
 
 
 TIMEOUT_CMD="/usr/bin/timeout -k 120 120"
@@ -52,7 +52,7 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/tj75qeje/mpi-comp-match/IMB-ASYNC/
 mkdir -p $OUTPATH
 
 MOD=$(( SLURM_ARRAY_TASK_ID % 4 ))
-MOD_PARAM=$(( (SLURM_ARRAY_TASK_ID / 4 ) % 6 ))
+MOD_PARAM=$(( ((SLURM_ARRAY_TASK_ID / 4 ) % 26 ) + 1 ))
 
 
 PARAM=$(sed "${MOD_PARAM}q;d" /home/tj75qeje/mpi-comp-match/IMB-ASYNC/parameters.txt)
@@ -75,7 +75,7 @@ $TIMEOUT_CMD srun ./IMB-ASYNC async_persistentpt2pt -cper10usec 64 -workload cal
 else
 ml openmpi/eager
 
-$TIMEOUT_CMD srun ./IMB-ASYNC async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 64 nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
+$TIMEOUT_CMD srun ./IMB-ASYNC async_persistentpt2pt -cper10usec 64 -workload calc -thread_level single -datatype char -ncycles 64 -nwarmup 64 $PARAM -output $OUTPATH/eager_calctime_${CALCTIME}.$SLURM_JOB_ID.$SLURM_ARRAY_TASK_ID.$I.yaml >& /dev/null
 fi
 
 
