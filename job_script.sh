@@ -42,6 +42,8 @@ srun ./a.out_original
 echo "Original:"
 srun ./a.out_original
 
+echo "======================="
+
 echo "Modified:"
 srun ./a.out
 echo "Modified:"

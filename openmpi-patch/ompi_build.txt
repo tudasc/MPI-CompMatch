@@ -5,6 +5,7 @@ cp /home/tj75qeje/mpi-comp-match/openmpi-patch/one-sided-persistent.c /home/tj75
 include definitions from header low-level.h in ompi/include/mpi.h.in
 
 beware that is is inside the #if defined(c_plusplus) || defined(__cplusplus) block that defines extern C for calling it from cpp
+and also include OMPI_DECLSPEC before each of them
 
 patch makefile.in:
 add line 1746:
@@ -17,14 +18,13 @@ patch /ompi/mca/osc/ucx/osc_ucx_component.c
 line 351 to:
         context_params.features = UCP_FEATURE_RMA | UCP_FEATURE_AMO32 | UCP_FEATURE_AMO64 | UCP_FEATURE_AM;
 
-
 configure:
 
 debug:
-CC=clang CXX=clang++ CFLAGS="-g -Og -fno-eliminate-unused-debug-symbols" LDFLAGS="-g" CXX_FLAGS="-g -Og -fno-eliminate-unused-debug-symbols" ./configure --prefix=/home/tj75qeje/modules/software/openmpi/4.1.1/ --enable-debug --disable-dependency-tracking --enable-mpi-cxx --enable-cxx-exceptions --enable-heterogeneous --enable-mpi1-compatibility --enable-static --with-hwloc=${HWLOC_ROOT} --with-slurm=/opt/slurm/current --with-pmi=/opt/slurm/current --with-ucx --enable-mca-no-build=btl-uct --enable-mpi-fortran=no
+./configure CC=clang CXX=clang++ CFLAGS="-g -Og -fno-eliminate-unused-debug-symbols" LDFLAGS="-g" CXX_FLAGS="-g -Og -fno-eliminate-unused-debug-symbols"  --prefix=/home/tj75qeje/modules/software/openmpi/4.1.1/ --enable-debug --disable-dependency-tracking --enable-mpi-cxx --enable-cxx-exceptions --enable-heterogeneous --enable-mpi1-compatibility --enable-static --with-hwloc=${HWLOC_ROOT} --with-slurm=/opt/slurm/current --with-pmi=/opt/slurm/current --with-ucx --enable-mca-no-build=btl-uct --enable-mpi-fortran=no
 
 production:
-CC=clang CXX=clang++ CFLAGS="-O3 -march=native -mtune=native" CXX_FLAGS="-O3 -march=native -mtune=native" ./configure --prefix=/home/tj75qeje/modules/software/openmpi/4.1.1/ --disable-dependency-tracking --enable-mpi-cxx --enable-cxx-exceptions --enable-heterogeneous --enable-mpi1-compatibility --enable-static --with-hwloc=${HWLOC_ROOT} --with-slurm=/opt/slurm/current --with-pmi=/opt/slurm/current --with-ucx --enable-mca-no-build=btl-uct --enable-mpi-fortran=no
+./configure CC=clang CXX=clang++ CFLAGS=-DNDEBUG -O3 -march=native -mtune=native CXX_FLAGS=-DNDEBUG -O3 -march=native -mtune=native --prefix=/home/tj75qeje/modules/software/openmpi/4.1.1_rendevouz2 --disable-dependency-tracking --enable-mpi-cxx --enable-cxx-exceptions --enable-heterogeneous --enable-mpi1-compatibility --enable-static --with-hwloc=/shared/apps/.gcc/8.3/hwloc/2.5.0 --with-slurm=/opt/slurm/current --with-pmi=/opt/slurm/current --with-ucx --enable-mca-no-build=btl-uct --enable-mpi-fortran=no
 
 
 make -j && make install
