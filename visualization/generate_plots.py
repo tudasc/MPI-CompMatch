@@ -9,7 +9,10 @@ import pickle
 
 # DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/2"
 DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2"
-# DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_no_warmup"
+#DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_noWarmup"
+#DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_inside"
+#DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_2_inside_no_warmup"
+#DATA_DIR = "/work/scratch/tj75qeje/mpi-comp-match/output/measurement_192"
 
 CACHE_FILE = "cache.pkl"
 PLTSIZE = (12, 4)
@@ -21,11 +24,11 @@ EAGER = 2
 RENDEVOUZ1 = 3
 RENDEVOUZ2 = 4
 
-names = {NORMAL: "NORMAL", EAGER: "EAGER", RENDEVOUZ1: "RENDEVOUZ1", RENDEVOUZ2: "RENDEVOUZ2"}
+names = {NORMAL: "Normal", EAGER: "Eager", RENDEVOUZ1: "Rendezvous 1", RENDEVOUZ2: "Rendezvous 2"}
 # color sceme by Paul Tol https://personal.sron.nl/~pault/
 colors = {NORMAL: "#4477AA", EAGER: "#EE6677", RENDEVOUZ1: "#AA3377", RENDEVOUZ2: "#228833"}
 
-buffer_sizes = [4, 8, 32, 512, 1024, 4906, 16384, 165536, 1048576, 4194304, 16777216]
+buffer_sizes = [4, 8, 32, 512, 1024, 4906, 16384, 65536, 1048576, 4194304, 16777216]
 # buffer_sizes = [4, 8, 32, 512, 1024, 16384, 1048576, 4194304, 16777216]
 # buffer_sizes = [512,4194304,16777216]
 buffer_sizes_with_full_plot = [1024, 1048576]
