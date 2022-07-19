@@ -13,8 +13,6 @@
 #include <math.h>
 #include <mpi.h>
 
-//DEBUG:
-#include "openmpi-patch/one-sided-persistent.c"
 
 /* ************************************************************************ */
 /*  main                                                                    */
@@ -22,7 +20,7 @@
 
 #define DUMMY_WLOAD_TIME 7
 
-//#define STATISTIC_PRINTING
+#define STATISTIC_PRINTING
 
 // bufsize and num iter have to be large to get performance benefit, otherwise
 // slowdown occur
@@ -32,12 +30,12 @@
 //#define BUFFER_SIZE 1000000
 
 // 10KB
-#define BUFFER_SIZE 10000
+//#define BUFFER_SIZE 10000
 //#define NUM_ITERS 100000
-#define NUM_ITERS 25000
+//#define NUM_ITERS 25000
 
-//#define BUFFER_SIZE 10
-//#define NUM_ITERS 3
+#define BUFFER_SIZE 10
+#define NUM_ITERS 30
 
 #define N BUFFER_SIZE
 
@@ -48,28 +46,28 @@ void dummy_workload(double *buf) {
   }}
 }
 
-void check_buffer_content(int *buf, int n) {
+void check_buffer_content(int *buf,int peer, int n) {
   int not_correct = 0;
 
   for (int i = 0; i < N; ++i) {
-    if (buf[i] != 1 * i * n) {
+    if (buf[i] != peer * i * n) {
       not_correct++;
     }
 
   }
 
   if (not_correct != 0) {
-    printf("ERROR: %d: buffer has unexpected content\n", n);
+    printf("ERROR: %d: buffer has unexpected content (%d/%d errors)\n", n,not_correct,N);
     // exit(-1);
   }
+
 }
 
 #define tag_entry 42
 #define tag_rkey_data 43
 #define tag_rkey_flag 44
 
-void use_persistent_comm() {
-MPIOPT_INIT();
+double use_persistent_comm() {
   int rank, numtasks;
   // Welchen rang habe ich?
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -77,8 +75,16 @@ MPIOPT_INIT();
   MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
   int *buffer_r = malloc(N * sizeof(int));
   int *buffer_s = malloc(N * sizeof(int));
-  double *work_buffer = malloc(N * sizeof(double));
+  double *work_buffer = calloc(sizeof(double),N);
   work_buffer[N - 1] = 0.6;
+
+  struct timeval start_time; /* time when program started */
+  struct timeval stop_time; /* time when calculation completed                */
+
+  // start timer after allocation of the data-buffers
+
+  gettimeofday(&start_time, NULL); /*  start timer         */
+
 
   MPI_Request req_s;
   MPI_Request req_r;
@@ -87,115 +93,97 @@ MPIOPT_INIT();
   if (rank == 1) {
 	  peer=0;}
 
-    MPIOPT_Send_init(buffer_s, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
+    MPI_Send_init(buffer_s, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
                   &req_s);
-    MPIOPT_Recv_init(buffer_r, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
+    MPI_Recv_init(buffer_r, sizeof(int) * N, MPI_BYTE, peer, 42, MPI_COMM_WORLD,
                       &req_r);
 
     for (int n = 0; n < NUM_ITERS; ++n) {
       for (int i = 0; i < N; ++i) {
     	  buffer_s[i] = rank * i * n;
       }
-      //MPI_Start(&req_r);
-      //MPI_Start(&req_s);
-      MPIOPT_Start_send(&req_s);
-	  MPIOPT_Start_recv(&req_r);
+      MPI_Start(&req_r);
+      MPI_Start(&req_s);
 
       dummy_workload(work_buffer);
 
       //MPI_Wait(&req_s, MPI_STATUS_IGNORE);
       //MPI_Wait(&req_r, MPI_STATUS_IGNORE);
-      MPIOPT_Wait_send(&req_s, MPI_STATUS_IGNORE);
-      MPIOPT_Wait_recv(&req_r, MPI_STATUS_IGNORE);
+      MPI_Wait(&req_s, MPI_STATUS_IGNORE);
+      MPI_Wait(&req_r, MPI_STATUS_IGNORE);
 
 #ifdef STATISTIC_PRINTING
-      check_buffer_content(buffer_r, n);
+      check_buffer_content(buffer_r,peer, n);
 #endif
 
     }
 
-  MPIOPT_Request_free(&req_r);
-  MPIOPT_Request_free(&req_s);
-  MPIOPT_FINALIZE();
+  MPI_Request_free(&req_r);
+  MPI_Request_free(&req_s);
+
+  gettimeofday(&stop_time, NULL); /*  stop timer          */
+  return (stop_time.tv_sec - start_time.tv_sec) +
+         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 }
 
-void use_standard_comm() {
 
-  int rank, numtasks;
-  // Welchen rang habe ich?
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  // wie viele Tasks gibt es?
-  MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
-  int *buffer = malloc(N * sizeof(int));
-  double *work_buffer = malloc(N * sizeof(double));
+double without_comm() {
+
+  double *work_buffer = calloc(sizeof(double),N);
   work_buffer[N - 1] = 0.6;
-
-  MPI_Request req;
-
-  if (rank == 1) {
-
-    for (int n = 0; n < NUM_ITERS; ++n) {
-      for (int i = 0; i < N; ++i) {
-        buffer[i] = rank * i * n;
-      }
-      MPI_Isend(buffer, sizeof(int) * N, MPI_BYTE, 0, 42, MPI_COMM_WORLD, &req);
-      dummy_workload(work_buffer);
-      MPI_Wait(&req, MPI_STATUS_IGNORE);
-    }
-  } else {
-    for (int n = 0; n < NUM_ITERS; ++n) {
-
-      for (int i = 0; i < N; ++i) {
-        buffer[i] = rank * i * n;
-      }
-
-      MPI_Irecv(buffer, sizeof(int) * N, MPI_BYTE, 1, 42, MPI_COMM_WORLD, &req);
-      dummy_workload(work_buffer);
-      MPI_Wait(&req, MPI_STATUS_IGNORE);
-#ifdef STATISTIC_PRINTING
-      check_buffer_content(buffer, n);
-#endif
-    }
-
-    // after comm
-    /*
-     for (int i = 0; i < N; ++i) {
-     printf("%i,", buffer[i]);
-     }
-     printf("\n");
-     */
-  }
-
-}
-
-//TODO use Reduce to only report max time
-// only use persistent and compare transformed VS non-transormed for fair comparision
-int main(int argc, char **argv) {
 
   struct timeval start_time; /* time when program started */
   struct timeval stop_time; /* time when calculation completed                */
 
-  // Initialisiere Alle Prozesse
-  MPI_Init(&argc, &argv);
+  // start timer after allocation of the data-buffers
+
+  gettimeofday(&start_time, NULL); /*  start timer         */
+
+    for (int n = 0; n < NUM_ITERS; ++n) {
+      dummy_workload(work_buffer);
+    }
+
+  gettimeofday(&stop_time, NULL); /*  stop timer          */
+  return (stop_time.tv_sec - start_time.tv_sec) +
+         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
+}
+
+
+//TODO use Reduce to only report max time
+// only use persistent and compare transformed VS non-transormed for fair comparision
+int main(int argc, char **argv) {
+	  // Initialisiere Alle Prozesse
+	  MPI_Init(&argc, &argv);
+
+
+
+
+  int rank;
+  // Welchen rang habe ich?
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  double time_without_comm = without_comm();
  
   MPI_Barrier(MPI_COMM_WORLD);
-  gettimeofday(&start_time, NULL); /*  start timer         */
-  use_persistent_comm();
-  gettimeofday(&stop_time, NULL); /*  stop timer          */
-  double time = (stop_time.tv_sec - start_time.tv_sec) +
-         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
-MPI_Barrier(MPI_COMM_WORLD);
 
-  printf("Persistent:    %f s \n", time);
+  double time_with_comm = use_persistent_comm();
 
   MPI_Barrier(MPI_COMM_WORLD);
-  gettimeofday(&start_time, NULL); /*  start timer         */
-  use_standard_comm();
-  gettimeofday(&stop_time, NULL); /*  stop timer          */
-  time = (stop_time.tv_sec - start_time.tv_sec) +
-         (stop_time.tv_usec - start_time.tv_usec) * 1e-6;
 
-  printf("Standard:    %f s \n", time);
+
+  double max_time =0.0;
+  MPI_Reduce(&time_with_comm, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+  if(rank==0){
+	  printf("Bufsize:    %lu B \n", BUFFER_SIZE);
+	  printf("repetitions:    %d \n", NUM_ITERS);
+  printf("Total Time:    %f s \n", max_time);
+  printf("Comp. Time:    %f s \n", time_without_comm);
+  printf("Overhead:    %f s \n", max_time-time_without_comm);
+  printf("MPI Timer Res:  %.7e s \n",MPI_Wtick());
+  }
 
   MPI_Finalize();
   return 0;
