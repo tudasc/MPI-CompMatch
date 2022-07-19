@@ -12,8 +12,8 @@
 #include "ompi/mca/osc/ucx/osc_ucx.h"
 #include "ompi/mca/osc/ucx/osc_ucx_request.h"
 
-#include <unistd.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 // config :
 #define RDMA_SPIN_WAIT_THRESHOLD 32
@@ -23,7 +23,6 @@
 //#define BUFFER_CONTENT_CHECKING
 
 //#define DISTORT_PROCESS_ORDER_ON_CROSSTALK
-
 
 // end config
 
@@ -288,7 +287,7 @@ static void b_send(MPIOPT_Request *request) {
     status = ucp_worker_fence(mca_osc_ucx_component.ucp_worker);
     status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                          request->remote_flag_addr, request->remote_flag_rkey);
-    assert(request->ucx_request_data_transfer ==NULL);
+    assert(request->ucx_request_data_transfer == NULL);
     request->ucx_request_data_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
 
@@ -301,7 +300,7 @@ static void b_send(MPIOPT_Request *request) {
     ucs_status_t status =
         ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                     request->remote_flag_addr, request->remote_flag_rkey);
-    assert(request->ucx_request_flag_transfer ==NULL);
+    assert(request->ucx_request_flag_transfer == NULL);
     request->ucx_request_flag_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
     // TODO do I call progress here?
@@ -374,7 +373,7 @@ static void b_recv(MPIOPT_Request *request) {
     status = ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                          request->remote_flag_addr, request->remote_flag_rkey);
     assert(status == UCS_OK || status == UCS_INPROGRESS);
-    assert(request->ucx_request_data_transfer ==NULL);
+    assert(request->ucx_request_data_transfer == NULL);
     request->ucx_request_data_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
 
@@ -389,7 +388,7 @@ static void b_recv(MPIOPT_Request *request) {
         ucp_put_nbi(request->ep, &request->flag_buffer, sizeof(int),
                     request->remote_flag_addr, request->remote_flag_rkey);
     assert(status == UCS_OK || status == UCS_INPROGRESS);
-    assert(request->ucx_request_flag_transfer ==NULL);
+    assert(request->ucx_request_flag_transfer == NULL);
     request->ucx_request_flag_transfer =
         ucp_ep_flush_nb(request->ep, 0, empty_function);
     // TODO do I call progress here?
@@ -442,8 +441,9 @@ static void e_recv(MPIOPT_Request *request) {
     }
 #ifdef DISTORT_PROCESS_ORDER_ON_CROSSTALK
     // distort process order, so that crosstalk is unlikely to happen again
-    // the larger the msg, the more important that processes are apart and no crosstalk takes place
-    usleep(rand()%(request->size));
+    // the larger the msg, the more important that processes are apart and no
+    // crosstalk takes place
+    usleep(rand() % (request->size));
 
 #endif
 #ifdef SUMMARY_STATISTIC_PRINTING
@@ -943,7 +943,7 @@ static int MPIOPT_Send_init_internal(void *buf, int count,
 #ifdef STATISTIC_PRINTING
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  printf("Rank %d: Init SEND to %d with msg size %d\n", rank, source,count);
+  printf("Rank %d: Init SEND to %d with msg size %d\n", rank, source, count);
 #endif
   memset(request, 0, sizeof(MPIOPT_Request));
   request->type = SEND_REQUEST_TYPE_SEARCH_FOR_RDMA_CONNECTION;
@@ -974,8 +974,8 @@ static int MPIOPT_Request_free_internal(MPIOPT_Request *request) {
   if (request->type == RECV_REQUEST_TYPE ||
       request->type == SEND_REQUEST_TYPE) {
 
-	  assert(request->ucx_request_data_transfer == NULL);
-	  assert(request->ucx_request_flag_transfer == NULL);
+    assert(request->ucx_request_data_transfer == NULL);
+    assert(request->ucx_request_flag_transfer == NULL);
     ucp_context_h context = mca_osc_ucx_component.ucp_context;
     // ucp_mem_unmap(context, request->mem_handle_flag);// deferred
     ucp_mem_unmap(context, request->mem_handle_data);
@@ -1019,7 +1019,7 @@ void MPIOPT_INIT() {
   to_free_list_head->next = NULL;
 
 #ifdef SUMMARY_STATISTIC_PRINTING
-  crosstalk_counter=0;
+  crosstalk_counter = 0;
 #endif
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_communicator);
   MPI_Comm_dup(MPI_COMM_WORLD, &handshake_response_communicator);
@@ -1050,8 +1050,8 @@ void MPIOPT_FINALIZE() {
 
       if (req->type == RECV_REQUEST_TYPE || req->type == SEND_REQUEST_TYPE) {
         // otherwise all these resources where never acquired
-    	  ucp_mem_unmap(context, req->mem_handle_flag);
-    	  ucp_rkey_destroy(req->remote_flag_rkey);
+        ucp_mem_unmap(context, req->mem_handle_flag);
+        ucp_rkey_destroy(req->remote_flag_rkey);
 
         // ucp_mem_unmap(context, req->mem_handle_data); // was freed before
       }
@@ -1062,7 +1062,7 @@ void MPIOPT_FINALIZE() {
     elem = nxt_elem;
   }
 #ifdef SUMMARY_STATISTIC_PRINTING
-  printf("Crosstalk_counter= %d\n",crosstalk_counter);
+  printf("Crosstalk_counter= %d\n", crosstalk_counter);
 #endif
 
   // TODO receive all pending messages from unsuccessful handshakes
